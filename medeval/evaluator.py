@@ -10,7 +10,8 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 
 from .utils import (
     load_possible_diagnoses, 
-    extract_diagnosis_from_path, 
+    extract_diagnosis_from_path,
+    extract_disease_category_from_path,
     get_samples_directory,
     load_sample,
     collect_sample_files
@@ -185,12 +186,14 @@ Answer:"""
         """
         sample = load_sample(sample_path)
         ground_truth = extract_diagnosis_from_path(sample_path)
+        disease_category = extract_disease_category_from_path(sample_path)
         
         prompt = self.create_prompt(sample, num_inputs, provide_diagnosis_list)
         predicted = self.query_llm(prompt)
         
         if self.show_responses:
             print(f"Sample: {sample_path}")
+            print(f"Disease Category: {disease_category}")
             print(f"Raw LLM Response: '{predicted}'")
             print(f"Ground Truth: '{ground_truth}'")
         
@@ -213,12 +216,61 @@ Answer:"""
         return {
             'sample_path': sample_path,
             'ground_truth': ground_truth,
+            'disease_category': disease_category,
             'predicted_raw': predicted,
             'predicted_matched': matched_prediction,
             'correct': correct,
             'prompt': prompt,
             'evaluation_method': 'llm_judge' if self.use_llm_judge else 'exact_match'
         }
+    
+    def calculate_category_metrics(self, results: List[Dict]) -> Dict:
+        """Calculate metrics for each disease category"""
+        category_metrics = {}
+        
+        # Group results by disease category
+        category_results = {}
+        for result in results:
+            category = result['disease_category']
+            if category not in category_results:
+                category_results[category] = []
+            category_results[category].append(result)
+        
+        # Calculate metrics for each category
+        for category, cat_results in category_results.items():
+            y_true = [r['ground_truth'] for r in cat_results]
+            y_pred = [r['predicted_matched'] for r in cat_results]
+            correct_predictions = [r['correct'] for r in cat_results]
+            
+            # Calculate accuracy directly from correct predictions
+            accuracy = sum(correct_predictions) / len(correct_predictions) if correct_predictions else 0
+            
+            # For precision/recall/F1, use sklearn with unique labels from this category
+            unique_labels = list(set(y_true + y_pred))
+            
+            if len(unique_labels) > 1:
+                precision = precision_score(y_true, y_pred, labels=unique_labels, 
+                                          average='weighted', zero_division=0)
+                recall = recall_score(y_true, y_pred, labels=unique_labels, 
+                                    average='weighted', zero_division=0)
+                f1 = f1_score(y_true, y_pred, labels=unique_labels, 
+                             average='weighted', zero_division=0)
+            else:
+                # Single label case
+                precision = accuracy
+                recall = accuracy  
+                f1 = accuracy
+            
+            category_metrics[category] = {
+                'accuracy': accuracy,
+                'precision': precision,
+                'recall': recall,
+                'f1': f1,
+                'num_samples': len(cat_results),
+                'unique_diagnoses': len(set(y_true))
+            }
+        
+        return category_metrics
     
     def evaluate_dataset(self, num_inputs: int = 6,
                         provide_diagnosis_list: bool = True, 
@@ -257,13 +309,21 @@ Answer:"""
         
         results = []
         for i, sample_path in enumerate(sample_files):
-            if i % 10 == 0:
-                print(f"Progress: {i}/{len(sample_files)}")
+            # Update progress more frequently for better user experience
+            if len(sample_files) <= 20:
+                # For small datasets, show every sample
+                print(f"Progress: {i+1}/{len(sample_files)}")
+            elif i % max(1, len(sample_files) // 10) == 0:
+                # For larger datasets, show 10 progress updates
+                print(f"Progress: {i+1}/{len(sample_files)}")
             
             result = self.evaluate_sample(sample_path, num_inputs, provide_diagnosis_list)
             results.append(result)
         
-        # Calculate metrics
+        print(f"Progress: {len(sample_files)}/{len(sample_files)} - Complete!")
+        print()
+        
+        # Calculate overall metrics
         y_true = [r['ground_truth'] for r in results]
         y_pred = [r['predicted_matched'] for r in results]
         
@@ -281,7 +341,7 @@ Answer:"""
         f1 = f1_score(y_true, y_pred, labels=unique_labels, 
                      average='weighted', zero_division=0)
         
-        # Per-class metrics
+        # Per-class metrics (individual diagnoses)
         per_class_metrics = {}
         for label in set(y_true):
             label_true = [1 if gt == label else 0 for gt in y_true]
@@ -295,6 +355,9 @@ Answer:"""
                     'support': sum(label_true)
                 }
         
+        # Calculate disease category metrics
+        category_metrics = self.calculate_category_metrics(results)
+        
         return {
             'overall_metrics': {
                 'accuracy': accuracy,
@@ -304,6 +367,7 @@ Answer:"""
                 'num_samples': len(results)
             },
             'per_class_metrics': per_class_metrics,
+            'category_metrics': category_metrics,
             'detailed_results': results,
             'configuration': {
                 'num_inputs': num_inputs,

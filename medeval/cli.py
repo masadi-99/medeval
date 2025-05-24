@@ -14,7 +14,8 @@ from .utils import (
     get_samples_directory,
     collect_sample_files,
     load_sample,
-    extract_diagnosis_from_path
+    extract_diagnosis_from_path,
+    extract_disease_category_from_path
 )
 
 
@@ -84,6 +85,37 @@ def main():
         print(f"Precision: {results['overall_metrics']['precision']:.3f}")
         print(f"Recall: {results['overall_metrics']['recall']:.3f}")
         print(f"F1-Score: {results['overall_metrics']['f1']:.3f}")
+        
+        # Display disease category metrics
+        if 'category_metrics' in results and results['category_metrics']:
+            print("\n" + "="*50)
+            print("DISEASE CATEGORY METRICS")
+            print("="*50)
+            
+            # Sort categories by accuracy (descending)
+            category_items = sorted(
+                results['category_metrics'].items(),
+                key=lambda x: x[1]['accuracy'],
+                reverse=True
+            )
+            
+            print(f"{'Category':<25} {'Samples':<8} {'Accuracy':<10} {'Precision':<10} {'Recall':<8} {'F1':<8}")
+            print("-" * 75)
+            
+            for category, metrics in category_items:
+                print(f"{category:<25} {metrics['num_samples']:<8} "
+                      f"{metrics['accuracy']:<10.3f} {metrics['precision']:<10.3f} "
+                      f"{metrics['recall']:<8.3f} {metrics['f1']:<8.3f}")
+            
+            # Summary statistics
+            avg_accuracy = sum(m['accuracy'] for m in results['category_metrics'].values()) / len(results['category_metrics'])
+            best_category = max(results['category_metrics'].items(), key=lambda x: x[1]['accuracy'])
+            worst_category = min(results['category_metrics'].items(), key=lambda x: x[1]['accuracy'])
+            
+            print("-" * 75)
+            print(f"Average category accuracy: {avg_accuracy:.3f}")
+            print(f"Best performing category: {best_category[0]} ({best_category[1]['accuracy']:.3f})")
+            print(f"Worst performing category: {worst_category[0]} ({worst_category[1]['accuracy']:.3f})")
         
         evaluator.save_results(results, args.output)
         
