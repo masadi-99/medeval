@@ -23,7 +23,8 @@ class DiagnosticEvaluator:
     """
     
     def __init__(self, api_key: str, model: str = "gpt-4o-mini", 
-                 flowchart_dir: str = None, samples_dir: str = None):
+                 flowchart_dir: str = None, samples_dir: str = None,
+                 use_llm_judge: bool = True, show_responses: bool = False):
         """
         Initialize the diagnostic evaluator
         
@@ -32,12 +33,16 @@ class DiagnosticEvaluator:
             model: Model to use for evaluation
             flowchart_dir: Directory containing diagnostic flowcharts (optional)
             samples_dir: Directory containing samples (optional)
+            use_llm_judge: Whether to use LLM as a judge for evaluation
+            show_responses: Whether to print LLM responses during evaluation
         """
         self.client = openai.OpenAI(api_key=api_key)
         self.model = model
         self.flowchart_dir = flowchart_dir
         self.samples_dir = samples_dir
         self.possible_diagnoses = load_possible_diagnoses(flowchart_dir)
+        self.use_llm_judge = use_llm_judge
+        self.show_responses = show_responses
         
     def create_prompt(self, sample: Dict, num_inputs: int, 
                       provide_diagnosis_list: bool) -> str:
@@ -100,6 +105,52 @@ class DiagnosticEvaluator:
             print(f"Error querying LLM: {e}")
             return ""
     
+    def create_judge_prompt(self, predicted: str, ground_truth: str) -> str:
+        """Create prompt for LLM judge to evaluate if prediction matches ground truth"""
+        prompt = f"""You are a medical expert evaluating diagnostic accuracy. 
+
+Your task is to determine if two medical diagnoses refer to the same condition, accounting for:
+- Different wording or phrasing
+- Medical synonyms and abbreviations
+- Alternative names for the same condition
+- Clinical equivalents
+
+Predicted Diagnosis: "{predicted}"
+Ground Truth Diagnosis: "{ground_truth}"
+
+Question: Do these two diagnoses refer to the same medical condition?
+
+Respond with ONLY "YES" if they refer to the same condition, or "NO" if they refer to different conditions.
+
+Answer:"""
+        return prompt
+    
+    def llm_judge_evaluation(self, predicted: str, ground_truth: str) -> bool:
+        """Use LLM to judge if prediction matches ground truth"""
+        if predicted.strip().lower() == ground_truth.strip().lower():
+            return True
+        
+        judge_prompt = self.create_judge_prompt(predicted, ground_truth)
+        
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "You are a medical expert judge evaluating diagnostic equivalence."},
+                    {"role": "user", "content": judge_prompt}
+                ],
+                max_tokens=10,
+                temperature=0.0
+            )
+            
+            judge_response = response.choices[0].message.content.strip().upper()
+            return judge_response == "YES"
+            
+        except Exception as e:
+            print(f"Error in LLM judge evaluation: {e}")
+            # Fallback to exact match
+            return predicted.strip().lower() == ground_truth.strip().lower()
+    
     def normalize_diagnosis(self, diagnosis: str) -> str:
         """Normalize diagnosis name for comparison"""
         # Remove extra whitespace, punctuation, and convert to lowercase
@@ -138,16 +189,35 @@ class DiagnosticEvaluator:
         prompt = self.create_prompt(sample, num_inputs, provide_diagnosis_list)
         predicted = self.query_llm(prompt)
         
+        if self.show_responses:
+            print(f"Sample: {sample_path}")
+            print(f"Raw LLM Response: '{predicted}'")
+            print(f"Ground Truth: '{ground_truth}'")
+        
         # Normalize and match prediction
         matched_prediction = self.find_best_match(predicted)
+        
+        # Determine correctness
+        if self.use_llm_judge:
+            correct = self.llm_judge_evaluation(matched_prediction, ground_truth)
+            if self.show_responses:
+                print(f"LLM Judge Decision: {'CORRECT' if correct else 'INCORRECT'}")
+        else:
+            correct = ground_truth == matched_prediction
+            if self.show_responses:
+                print(f"Exact Match: {'CORRECT' if correct else 'INCORRECT'}")
+        
+        if self.show_responses:
+            print("-" * 50)
         
         return {
             'sample_path': sample_path,
             'ground_truth': ground_truth,
             'predicted_raw': predicted,
             'predicted_matched': matched_prediction,
-            'correct': ground_truth == matched_prediction,
-            'prompt': prompt
+            'correct': correct,
+            'prompt': prompt,
+            'evaluation_method': 'llm_judge' if self.use_llm_judge else 'exact_match'
         }
     
     def evaluate_dataset(self, num_inputs: int = 6,
@@ -180,6 +250,10 @@ class DiagnosticEvaluator:
         print(f"Evaluating {len(sample_files)} samples...")
         print(f"Using {num_inputs} input fields")
         print(f"Providing diagnosis list: {provide_diagnosis_list}")
+        print(f"LLM Judge enabled: {self.use_llm_judge}")
+        if self.show_responses:
+            print(f"Showing LLM responses: {self.show_responses}")
+        print()
         
         results = []
         for i, sample_path in enumerate(sample_files):
@@ -234,7 +308,9 @@ class DiagnosticEvaluator:
             'configuration': {
                 'num_inputs': num_inputs,
                 'provide_diagnosis_list': provide_diagnosis_list,
-                'model': self.model
+                'model': self.model,
+                'use_llm_judge': self.use_llm_judge,
+                'show_responses': self.show_responses
             }
         }
     

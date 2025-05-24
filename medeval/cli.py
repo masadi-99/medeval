@@ -21,7 +21,7 @@ from .utils import (
 def main():
     """Main CLI entry point for evaluation"""
     parser = argparse.ArgumentParser(description='Evaluate LLM on diagnostic reasoning tasks')
-    parser.add_argument('--api-key', required=True, help='OpenAI API key')
+    parser.add_argument('--api-key', help='OpenAI API key (uses OPENAI_API_KEY env var if not provided)')
     parser.add_argument('--model', default='gpt-4o-mini', help='Model to use')
     parser.add_argument('--num-inputs', type=int, default=6, choices=range(1, 7),
                        help='Number of input fields to use (1-6)')
@@ -34,17 +34,34 @@ def main():
                        help='Output file for results')
     parser.add_argument('--samples-dir', help='Custom samples directory')
     parser.add_argument('--flowchart-dir', help='Custom flowchart directory')
+    parser.add_argument('--show-responses', action='store_true',
+                       help='Show actual LLM responses during evaluation')
+    parser.add_argument('--use-llm-judge', action='store_true', default=True,
+                       help='Use LLM as judge for evaluation (default: True)')
+    parser.add_argument('--no-llm-judge', action='store_true',
+                       help='Disable LLM judge and use exact string matching')
     
     args = parser.parse_args()
     
+    # Get API key from argument or environment variable
+    api_key = args.api_key or os.getenv('OPENAI_API_KEY')
+    if not api_key:
+        print("❌ Error: OpenAI API key required")
+        print("   Set OPENAI_API_KEY environment variable or use --api-key argument")
+        print("   export OPENAI_API_KEY='your-api-key-here'")
+        return
+    
     provide_list = args.provide_list and not args.no_list
+    use_llm_judge = args.use_llm_judge and not args.no_llm_judge
     
     try:
         evaluator = DiagnosticEvaluator(
-            api_key=args.api_key, 
+            api_key=api_key, 
             model=args.model,
             flowchart_dir=args.flowchart_dir,
-            samples_dir=args.samples_dir
+            samples_dir=args.samples_dir,
+            use_llm_judge=use_llm_judge,
+            show_responses=args.show_responses
         )
         
         results = evaluator.evaluate_dataset(
@@ -61,6 +78,7 @@ def main():
         print(f"Model: {results['configuration']['model']}")
         print(f"Number of inputs used: {results['configuration']['num_inputs']}")
         print(f"Provided diagnosis list: {results['configuration']['provide_diagnosis_list']}")
+        print(f"LLM Judge enabled: {results['configuration'].get('use_llm_judge', False)}")
         print(f"Total samples: {results['overall_metrics']['num_samples']}")
         print(f"Accuracy: {results['overall_metrics']['accuracy']:.3f}")
         print(f"Precision: {results['overall_metrics']['precision']:.3f}")
@@ -77,27 +95,29 @@ def main():
 def demo_main():
     """Demo CLI entry point"""
     parser = argparse.ArgumentParser(description='Run demo of LLM diagnostic evaluator')
-    parser.add_argument('--api-key', help='OpenAI API key (or set OPENAI_API_KEY env var)')
+    parser.add_argument('--api-key', help='OpenAI API key (uses OPENAI_API_KEY env var if not provided)')
     parser.add_argument('--samples-dir', help='Custom samples directory')
     parser.add_argument('--flowchart-dir', help='Custom flowchart directory')
+    parser.add_argument('--show-responses', action='store_true',
+                       help='Show actual LLM responses during demo')
     
     args = parser.parse_args()
     
+    # Get API key from argument or environment variable
     api_key = args.api_key or os.getenv('OPENAI_API_KEY')
-    
     if not api_key:
-        print("❌ Error: Please set your OpenAI API key")
+        print("❌ Error: OpenAI API key required")
+        print("   Set OPENAI_API_KEY environment variable or use --api-key argument")
         print("   export OPENAI_API_KEY='your-api-key-here'")
-        print("   or use --api-key argument")
         return
     
     try:
-        run_demo(api_key, args.samples_dir, args.flowchart_dir)
+        run_demo(api_key, args.samples_dir, args.flowchart_dir, args.show_responses)
     except Exception as e:
         print(f"❌ Error running demo: {e}")
 
 
-def run_demo(api_key: str, samples_dir: str = None, flowchart_dir: str = None):
+def run_demo(api_key: str, samples_dir: str = None, flowchart_dir: str = None, show_responses: bool = False):
     """Run a demo evaluation with a small subset of samples"""
     
     print("🏥 LLM Diagnostic Reasoning Evaluator Demo")
@@ -108,7 +128,9 @@ def run_demo(api_key: str, samples_dir: str = None, flowchart_dir: str = None):
         api_key=api_key, 
         model="gpt-4o-mini",
         flowchart_dir=flowchart_dir,
-        samples_dir=samples_dir
+        samples_dir=samples_dir,
+        use_llm_judge=True,
+        show_responses=show_responses
     )
     
     print(f"📋 Found {len(evaluator.possible_diagnoses)} possible diagnoses")
@@ -140,8 +162,8 @@ def run_demo(api_key: str, samples_dir: str = None, flowchart_dir: str = None):
     print(f"   Precision: {results_2['overall_metrics']['precision']:.3f}")
     print(f"   Recall: {results_2['overall_metrics']['recall']:.3f}")
     
-    # Demo 3: Evaluate without diagnosis list
-    print("\n🔬 Demo 3: No diagnosis list (6 inputs, no list)")
+    # Demo 3: Evaluate without diagnosis list (with LLM judge)
+    print("\n🔬 Demo 3: No diagnosis list (6 inputs, LLM judge enabled)")
     results_3 = evaluator.evaluate_dataset(
         num_inputs=6,
         provide_diagnosis_list=False,
@@ -160,10 +182,12 @@ def run_demo(api_key: str, samples_dir: str = None, flowchart_dir: str = None):
         print(f"   Ground truth: {sample_result['ground_truth']}")
         print(f"   Predicted: {sample_result['predicted_matched']}")
         print(f"   Correct: {sample_result['correct']}")
+        if show_responses and 'predicted_raw' in sample_result:
+            print(f"   Raw response: {sample_result['predicted_raw']}")
     
     print("\n✅ Demo completed!")
     print("\nTo run full evaluation, use:")
-    print("medeval --api-key YOUR_API_KEY --max-samples 50")
+    print("medeval --max-samples 50")
 
 
 def show_main():

@@ -10,10 +10,13 @@ This framework evaluates LLMs on their ability to provide primary discharge diag
 
 - **Configurable Input Fields**: Choose which clinical information to provide (1-6 inputs)
 - **Diagnosis List Toggle**: Option to provide or withhold the list of possible diagnoses
+- **LLM Judge**: Use an LLM to evaluate diagnostic equivalence (handles different wording/synonyms)
+- **Response Inspection**: Option to show actual LLM responses during evaluation
 - **Comprehensive Metrics**: Accuracy, precision, recall, and F1-score
 - **Per-class Analysis**: Detailed performance metrics for each diagnosis
 - **Flexible Evaluation**: Support for different models and sample sizes
 - **Easy Installation**: Install as a Python package with pip
+- **Environment Integration**: Uses standard OpenAI environment variables
 
 ## Installation
 
@@ -63,7 +66,7 @@ medeval-show
 ### 4. Run a full evaluation
 
 ```bash
-medeval --api-key YOUR_API_KEY --max-samples 50
+medeval --max-samples 50
 ```
 
 ## Dataset Structure
@@ -95,17 +98,23 @@ The package provides three main commands:
 #### 1. `medeval` - Main evaluation command
 
 ```bash
-# Basic evaluation with default settings
-medeval --api-key YOUR_API_KEY --max-samples 50
+# Basic evaluation (uses OPENAI_API_KEY environment variable)
+medeval --max-samples 50
 
 # Evaluate with limited clinical information
-medeval --api-key YOUR_API_KEY --num-inputs 2 --max-samples 100
+medeval --num-inputs 2 --max-samples 100
 
 # Evaluate without providing diagnosis list (open-ended)
-medeval --api-key YOUR_API_KEY --no-list --max-samples 100
+medeval --no-list --max-samples 100
+
+# Show actual LLM responses during evaluation
+medeval --show-responses --max-samples 10
+
+# Use exact string matching instead of LLM judge
+medeval --no-llm-judge --max-samples 50
 
 # Full evaluation with all samples
-medeval --api-key YOUR_API_KEY --output full_evaluation.json
+medeval --output full_evaluation.json
 ```
 
 #### 2. `medeval-demo` - Quick demonstration
@@ -116,6 +125,9 @@ medeval-demo
 
 # Run demo with explicit API key
 medeval-demo --api-key YOUR_API_KEY
+
+# Show LLM responses during demo
+medeval-demo --show-responses
 ```
 
 #### 3. `medeval-show` - Dataset analysis
@@ -132,8 +144,12 @@ You can also use the package programmatically:
 ```python
 from medeval import DiagnosticEvaluator
 
-# Initialize evaluator
-evaluator = DiagnosticEvaluator(api_key="your-api-key")
+# Initialize evaluator (uses OPENAI_API_KEY environment variable)
+evaluator = DiagnosticEvaluator(
+    api_key="your-api-key",  # or use os.getenv('OPENAI_API_KEY')
+    use_llm_judge=True,      # Enable LLM judge (default)
+    show_responses=False     # Show LLM responses (default: False)
+)
 
 # Run evaluation
 results = evaluator.evaluate_dataset(
@@ -155,7 +171,7 @@ evaluator.save_results(results, "my_results.json")
 
 | Argument | Description | Default |
 |----------|-------------|---------|
-| `--api-key` | OpenAI API key (required) | - |
+| `--api-key` | OpenAI API key | Uses `OPENAI_API_KEY` env var |
 | `--model` | Model to use | gpt-4o-mini |
 | `--num-inputs` | Number of input fields (1-6) | 6 |
 | `--provide-list` | Provide diagnosis list | True |
@@ -164,6 +180,28 @@ evaluator.save_results(results, "my_results.json")
 | `--output` | Output JSON file | evaluation_results.json |
 | `--samples-dir` | Custom samples directory | Package data |
 | `--flowchart-dir` | Custom flowchart directory | Package data |
+| `--show-responses` | Show actual LLM responses | False |
+| `--use-llm-judge` | Use LLM as judge for evaluation | True |
+| `--no-llm-judge` | Use exact string matching | False |
+
+## LLM Judge Feature
+
+The LLM Judge is a key feature that significantly improves evaluation accuracy, especially when diagnosis lists are not provided. Instead of exact string matching, it uses the same LLM to determine if two diagnoses refer to the same medical condition.
+
+### Benefits:
+- **Handles Synonyms**: "Heart Attack" vs "Myocardial Infarction"
+- **Medical Abbreviations**: "MI" vs "Myocardial Infarction"  
+- **Different Phrasing**: "Type 2 Diabetes" vs "Diabetes Mellitus Type II"
+- **Clinical Equivalents**: "CHF" vs "Congestive Heart Failure"
+
+### Usage:
+```bash
+# LLM Judge enabled (default)
+medeval --max-samples 50
+
+# Disable LLM Judge (exact matching only)
+medeval --no-llm-judge --max-samples 50
+```
 
 ## Output Format
 
@@ -189,9 +227,20 @@ The evaluation produces a JSON file with:
   "configuration": {
     "num_inputs": 6,
     "provide_diagnosis_list": true,
-    "model": "gpt-4o-mini"
+    "model": "gpt-4o-mini",
+    "use_llm_judge": true,
+    "show_responses": false
   },
-  "detailed_results": [...]
+  "detailed_results": [
+    {
+      "sample_path": "...",
+      "ground_truth": "NSTEMI",
+      "predicted_raw": "Non-ST elevation myocardial infarction",
+      "predicted_matched": "NSTEMI",
+      "correct": true,
+      "evaluation_method": "llm_judge"
+    }
+  ]
 }
 ```
 
@@ -203,6 +252,7 @@ This framework enables investigation of various research questions:
 2. **Open vs. Closed Diagnosis**: How does performance differ when the model has access to possible diagnoses vs. open-ended diagnosis?
 3. **Model Comparison**: How do different LLMs perform on diagnostic tasks?
 4. **Error Analysis**: What types of diagnostic errors do LLMs make most frequently?
+5. **Evaluation Methods**: How does LLM judge compare to exact string matching?
 
 ## Experimental Design Examples
 
@@ -211,8 +261,7 @@ Compare accuracy as more clinical information is provided:
 
 ```bash
 for inputs in {1..6}; do
-    medeval --api-key $OPENAI_API_KEY \
-        --num-inputs $inputs \
+    medeval --num-inputs $inputs \
         --max-samples 100 \
         --output "results_${inputs}_inputs.json"
 done
@@ -222,15 +271,27 @@ done
 
 ```bash
 # With diagnosis list
-medeval --api-key $OPENAI_API_KEY \
-    --max-samples 200 \
+medeval --max-samples 200 \
     --output results_with_list.json
 
 # Without diagnosis list  
-medeval --api-key $OPENAI_API_KEY \
-    --no-list \
+medeval --no-list \
     --max-samples 200 \
     --output results_no_list.json
+```
+
+### Experiment 3: LLM Judge vs. Exact Matching
+
+```bash
+# With LLM judge
+medeval --no-list \
+    --max-samples 100 \
+    --output results_llm_judge.json
+
+# With exact matching
+medeval --no-list --no-llm-judge \
+    --max-samples 100 \
+    --output results_exact_match.json
 ```
 
 ## Custom Data
@@ -238,8 +299,7 @@ medeval --api-key $OPENAI_API_KEY \
 You can use your own data by specifying custom directories:
 
 ```bash
-medeval --api-key YOUR_API_KEY \
-    --samples-dir /path/to/your/samples \
+medeval --samples-dir /path/to/your/samples \
     --flowchart-dir /path/to/your/flowcharts
 ```
 
@@ -292,8 +352,13 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 2. **Data not found**: The package includes sample data, but if you're using custom data, ensure the paths are correct
 
 3. **API key issues**: Make sure your OpenAI API key is valid and has sufficient credits
+   ```bash
+   export OPENAI_API_KEY='your-api-key-here'
+   ```
 
 4. **Permission errors**: On some systems, you might need to use `pip install --user -e .`
+
+5. **LLM Judge errors**: If the LLM judge fails, it falls back to exact matching automatically
 
 ### Getting Help
 

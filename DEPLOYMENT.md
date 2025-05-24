@@ -91,10 +91,16 @@ docker run -e OPENAI_API_KEY="your-key" medeval medeval-show
 medeval-demo
 
 # Small evaluation (50 samples)
-medeval --api-key $OPENAI_API_KEY --max-samples 50 --output results_50.json
+medeval --max-samples 50 --output results_50.json
 
 # Full evaluation (all samples)
-medeval --api-key $OPENAI_API_KEY --output full_evaluation.json
+medeval --output full_evaluation.json
+
+# Show LLM responses during evaluation
+medeval --max-samples 10 --show-responses
+
+# Use exact string matching instead of LLM judge
+medeval --max-samples 50 --no-llm-judge
 ```
 
 ### Research Experiments
@@ -102,15 +108,18 @@ medeval --api-key $OPENAI_API_KEY --output full_evaluation.json
 ```bash
 # Information progression experiment
 for inputs in {1..6}; do
-    medeval --api-key $OPENAI_API_KEY \
-        --num-inputs $inputs \
+    medeval --num-inputs $inputs \
         --max-samples 100 \
         --output "results_${inputs}_inputs.json"
 done
 
 # Open vs closed diagnosis
-medeval --api-key $OPENAI_API_KEY --max-samples 200 --output closed_diagnosis.json
-medeval --api-key $OPENAI_API_KEY --no-list --max-samples 200 --output open_diagnosis.json
+medeval --max-samples 200 --output closed_diagnosis.json
+medeval --no-list --max-samples 200 --output open_diagnosis.json
+
+# LLM Judge vs Exact Matching comparison
+medeval --no-list --max-samples 100 --output llm_judge.json
+medeval --no-list --no-llm-judge --max-samples 100 --output exact_match.json
 ```
 
 ### Batch Processing
@@ -120,7 +129,7 @@ Create a script `run_evaluation.sh`:
 ```bash
 #!/bin/bash
 
-API_KEY="your-openai-api-key"
+# API key is read from OPENAI_API_KEY environment variable
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 OUTPUT_DIR="results_${TIMESTAMP}"
 
@@ -131,18 +140,21 @@ echo "Starting evaluation batch at $(date)"
 # Test different input configurations
 for inputs in 1 2 3 6; do
     echo "Running evaluation with $inputs inputs..."
-    medeval --api-key $API_KEY \
-        --num-inputs $inputs \
+    medeval --num-inputs $inputs \
         --max-samples 100 \
         --output "$OUTPUT_DIR/results_${inputs}_inputs.json"
 done
 
 # Test with and without diagnosis list
-echo "Running open diagnosis evaluation..."
-medeval --api-key $API_KEY \
-    --no-list \
+echo "Running open diagnosis evaluation with LLM judge..."
+medeval --no-list \
     --max-samples 100 \
-    --output "$OUTPUT_DIR/results_open_diagnosis.json"
+    --output "$OUTPUT_DIR/results_open_llm_judge.json"
+
+echo "Running open diagnosis evaluation with exact matching..."
+medeval --no-list --no-llm-judge \
+    --max-samples 100 \
+    --output "$OUTPUT_DIR/results_open_exact.json"
 
 echo "Evaluation batch completed at $(date)"
 echo "Results saved in $OUTPUT_DIR/"
