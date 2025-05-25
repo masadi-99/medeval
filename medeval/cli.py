@@ -316,7 +316,16 @@ def run_demo(api_key: str, samples_dir: str = None, flowchart_dir: str = None, s
             print(f"   Selected categories: {sample_result['selected_categories']}")
         if 'reasoning_trace' in sample_result and sample_result['reasoning_trace']:
             print(f"   Reasoning steps: {sample_result['reasoning_steps']}")
-            print(f"   Reasoning path: {' → '.join([step.get('node', 'N/A') for step in sample_result['reasoning_trace']])}")
+            print(f"   Detailed reasoning path:")
+            for step in sample_result['reasoning_trace']:
+                if step.get('action') == 'start':
+                    print(f"     Step {step['step']}: Starting -> {step.get('current_node')}")
+                elif step.get('action') == 'reasoning_step':
+                    print(f"     Step {step['step']}: {step.get('current_node')} -> {step.get('chosen_option')}")
+                    if step.get('parsed_rationale'):
+                        print(f"       Rationale: {step['parsed_rationale'][:80]}...")
+                elif step.get('action') == 'final_diagnosis':
+                    print(f"     Step {step['step']}: Final -> {step.get('current_node')}")
         print(f"   Final diagnosis: {sample_result['predicted_matched']}")
         print(f"   Diagnosis correct: {sample_result['correct']}")
     

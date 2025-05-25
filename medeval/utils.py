@@ -356,38 +356,119 @@ def format_reasoning_step(step_num: int, current_node: str, available_options: L
     
     # Add available options
     if available_options:
-        prompt += "Based on the patient information and clinical criteria, select the next most appropriate diagnostic consideration:\n\n"
+        prompt += "Available next diagnostic considerations:\n"
         for i, option in enumerate(available_options, 1):
             prompt += f"{i}. {option}\n"
-        prompt += f"\nRespond with ONLY the number (1-{len(available_options)}) of your choice.\n"
+            # Add knowledge for each option if available
+            if option in knowledge:
+                option_knowledge = knowledge[option]
+                if isinstance(option_knowledge, dict):
+                    prompt += f"   Clinical criteria: "
+                    criteria_parts = []
+                    for key, value in option_knowledge.items():
+                        criteria_parts.append(f"{key}: {value}")
+                    prompt += "; ".join(criteria_parts[:2])  # Limit to avoid too long prompts
+                    if len(option_knowledge) > 2:
+                        prompt += "..."
+                elif isinstance(option_knowledge, str):
+                    # Truncate long knowledge text
+                    truncated = option_knowledge[:150] + "..." if len(option_knowledge) > 150 else option_knowledge
+                    prompt += f"   Clinical criteria: {truncated}"
+                prompt += "\n"
+        
+        prompt += f"\nBased on the patient information above, analyze how the patient's clinical presentation matches each diagnostic consideration.\n\n"
+        prompt += f"Please provide your reasoning in this format:\n"
+        prompt += f"ANALYSIS:\n"
+        prompt += f"- Compare patient symptoms/findings to each option's clinical criteria\n"
+        prompt += f"- Identify which patient findings support or rule out each option\n"
+        prompt += f"- Explain your clinical reasoning\n\n"
+        prompt += f"DECISION: [Number of chosen option] - [Option name]\n"
+        prompt += f"RATIONALE: [Brief explanation of why this option best fits the patient]\n"
     else:
-        prompt += "This appears to be a final diagnosis. Confirm if this is your primary discharge diagnosis.\n"
-        prompt += "Respond with 'CONFIRMED' if this is your final diagnosis, or 'RECONSIDER' if you want to explore other options.\n"
+        prompt += "This appears to be a final diagnosis. Based on the patient information and the diagnostic path taken, "
+        prompt += "please confirm if this is the most appropriate primary discharge diagnosis.\n\n"
+        prompt += f"Please provide your reasoning:\n"
+        prompt += f"ANALYSIS: How does the patient's presentation support this diagnosis?\n"
+        prompt += f"DECISION: CONFIRMED or RECONSIDER\n"
+        prompt += f"RATIONALE: Explanation for your decision\n"
     
     return prompt
 
 
-def extract_reasoning_choice(response: str, available_options: List[str]) -> str:
-    """Extract the chosen option from LLM response"""
+def extract_reasoning_choice(response: str, available_options: List[str]) -> Dict:
+    """Extract the chosen option and reasoning from LLM response"""
     
-    response = response.strip()
+    response_text = response.strip()
     
-    # Try to extract number
+    # Try to extract structured response
+    result = {
+        'chosen_option': "",
+        'analysis': "",
+        'rationale': "",
+        'decision_text': ""
+    }
+    
+    # Extract sections
     import re
-    number_match = re.search(r'\b(\d+)\b', response)
+    
+    # Extract ANALYSIS section
+    analysis_match = re.search(r'ANALYSIS:\s*(.*?)(?=DECISION:|$)', response_text, re.DOTALL | re.IGNORECASE)
+    if analysis_match:
+        result['analysis'] = analysis_match.group(1).strip()
+    
+    # Extract DECISION section
+    decision_match = re.search(r'DECISION:\s*(.*?)(?=RATIONALE:|$)', response_text, re.DOTALL | re.IGNORECASE)
+    if decision_match:
+        result['decision_text'] = decision_match.group(1).strip()
+    
+    # Extract RATIONALE section
+    rationale_match = re.search(r'RATIONALE:\s*(.*?)$', response_text, re.DOTALL | re.IGNORECASE)
+    if rationale_match:
+        result['rationale'] = rationale_match.group(1).strip()
+    
+    # Parse the decision to extract the chosen option
+    decision_text = result['decision_text']
+    
+    # Try to extract number and option name
+    number_match = re.search(r'\b(\d+)\b', decision_text)
     if number_match:
         try:
             choice_num = int(number_match.group(1))
             if 1 <= choice_num <= len(available_options):
-                return available_options[choice_num - 1]
+                result['chosen_option'] = available_options[choice_num - 1]
+            else:
+                # If number is out of range, try text matching
+                result['chosen_option'] = _match_option_by_text(decision_text, available_options)
         except ValueError:
-            pass
+            result['chosen_option'] = _match_option_by_text(decision_text, available_options)
+    else:
+        # Try direct text matching if no number found
+        result['chosen_option'] = _match_option_by_text(decision_text, available_options)
     
-    # Try direct text matching
-    response_lower = response.lower()
+    # If still no match, try the whole response
+    if not result['chosen_option']:
+        result['chosen_option'] = _match_option_by_text(response_text, available_options)
+    
+    # Default to first option if parsing completely fails
+    if not result['chosen_option'] and available_options:
+        result['chosen_option'] = available_options[0]
+    
+    return result
+
+
+def _match_option_by_text(text: str, available_options: List[str]) -> str:
+    """Helper function to match option by text content"""
+    text_lower = text.lower()
+    
+    # Direct matching
     for option in available_options:
-        if option.lower() in response_lower or response_lower in option.lower():
+        if option.lower() in text_lower:
             return option
     
-    # Default to first option if parsing fails
-    return available_options[0] if available_options else "" 
+    # Partial matching
+    for option in available_options:
+        option_words = option.lower().split()
+        if any(word in text_lower for word in option_words if len(word) > 3):
+            return option
+    
+    return "" 

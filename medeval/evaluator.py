@@ -242,7 +242,16 @@ Answer:"""
                 print(f"Iterative Reasoning Steps: {reasoning_steps}")
                 print(f"Reasoning Path:")
                 for step in reasoning_trace:
-                    print(f"  Step {step['step']}: {step.get('action', 'step')} - {step.get('response', step.get('chosen_option', 'N/A'))}")
+                    if step.get('action') == 'start':
+                        print(f"  Step {step['step']}: Starting with {step.get('category')} -> {step.get('current_node')}")
+                    elif step.get('action') == 'reasoning_step':
+                        print(f"  Step {step['step']}: {step.get('current_node')} -> {step.get('chosen_option')}")
+                        if step.get('parsed_analysis'):
+                            print(f"    Analysis: {step['parsed_analysis'][:100]}...")
+                        if step.get('parsed_rationale'):
+                            print(f"    Rationale: {step['parsed_rationale'][:100]}...")
+                    elif step.get('action') == 'final_diagnosis':
+                        print(f"  Step {step['step']}: Final diagnosis - {step.get('current_node')}")
                 print(f"Final Diagnosis: '{predicted}'")
                 print(f"Ground Truth Diagnosis: '{ground_truth}'")
                 print(f"Reasoning Path Correct: {reasoning_path_correct}")
@@ -771,7 +780,7 @@ Answer:"""
         reasoning_trace.append({
             'step': current_step,
             'category': current_category,
-            'node': current_node,
+            'current_node': current_node,
             'action': 'start',
             'response': f"Starting with {current_category} -> {current_node}"
         })
@@ -786,7 +795,7 @@ Answer:"""
                 reasoning_trace.append({
                     'step': current_step,
                     'category': current_category,
-                    'node': current_node,
+                    'current_node': current_node,
                     'action': 'final_diagnosis',
                     'response': f"Reached final diagnosis: {current_node}"
                 })
@@ -801,7 +810,7 @@ Answer:"""
                 reasoning_trace.append({
                     'step': current_step,
                     'category': current_category,
-                    'node': current_node,
+                    'current_node': current_node,
                     'action': 'final_diagnosis',
                     'response': f"No further options, final diagnosis: {current_node}"
                 })
@@ -819,18 +828,22 @@ Answer:"""
             # Get LLM response
             step_response = self.query_llm(step_prompt)
             
-            # Parse the choice
-            chosen_node = extract_reasoning_choice(step_response, children)
+            # Parse the choice and reasoning
+            reasoning_result = extract_reasoning_choice(step_response, children)
+            chosen_node = reasoning_result['chosen_option']
             
             reasoning_trace.append({
                 'step': current_step,
                 'category': current_category,
-                'node': current_node,
+                'current_node': current_node,
                 'available_options': children,
                 'chosen_option': chosen_node,
                 'action': 'reasoning_step',
                 'prompt': step_prompt,
-                'response': step_response
+                'response': step_response,
+                'parsed_analysis': reasoning_result.get('analysis', ''),
+                'parsed_rationale': reasoning_result.get('rationale', ''),
+                'decision_text': reasoning_result.get('decision_text', '')
             })
             
             current_node = chosen_node

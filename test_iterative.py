@@ -68,7 +68,18 @@ def test_iterative_reasoning():
             
             if 'reasoning_trace' in sample:
                 print(f"   Reasoning steps: {sample.get('reasoning_steps', 0)}")
-                print(f"   Reasoning trace: {len(sample['reasoning_trace'])} steps")
+                print(f"   Detailed reasoning trace:")
+                for step in sample['reasoning_trace']:
+                    if step.get('action') == 'start':
+                        print(f"     Step {step['step']}: Starting with {step.get('category')} -> {step.get('current_node')}")
+                    elif step.get('action') == 'reasoning_step':
+                        print(f"     Step {step['step']}: {step.get('current_node')} -> {step.get('chosen_option')}")
+                        if step.get('parsed_analysis'):
+                            print(f"       Analysis: {step['parsed_analysis'][:100]}...")
+                        if step.get('parsed_rationale'):
+                            print(f"       Rationale: {step['parsed_rationale'][:100]}...")
+                    elif step.get('action') == 'final_diagnosis':
+                        print(f"     Step {step['step']}: Final diagnosis -> {step.get('current_node')}")
         
         print(f"\n✅ Test completed successfully!")
         

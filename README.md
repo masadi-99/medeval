@@ -249,17 +249,19 @@ The Iterative Step-by-Step Reasoning feature implements the most sophisticated d
 
 **Step 2: Iterative Flowchart Traversal**
 - LLM starts at the root of the selected flowchart(s)
-- At each node, LLM evaluates patient data against clinical criteria
-- Makes step-by-step decisions to move through the diagnostic tree
+- At each node, LLM analyzes patient data against clinical criteria for each possible next step
+- LLM provides structured reasoning: ANALYSIS (comparing patient findings to diagnostic criteria), DECISION (chosen path), and RATIONALE (clinical justification)
+- Makes step-by-step decisions to move through the diagnostic tree based on clinical evidence
 - Continues until reaching a leaf node (final diagnosis)
-- Each step is guided by the flowchart structure and clinical knowledge
+- Each step captures detailed clinical reasoning and justification
 
 ### Benefits:
 - **Explicit Reasoning**: Every diagnostic step is recorded and interpretable
-- **Structured Decision Making**: Follows established clinical decision trees
+- **Clinical Evidence Matching**: LLM must justify each step by connecting patient findings to diagnostic criteria
+- **Structured Decision Making**: Follows established clinical decision trees with detailed reasoning
 - **Path Validation**: Can evaluate if the reasoning path used correct disease categories
-- **Educational Value**: Shows how diagnostic criteria are applied step-by-step
-- **Error Analysis**: Identifies where in the reasoning process errors occur
+- **Educational Value**: Shows how diagnostic criteria are applied step-by-step with clinical justification
+- **Error Analysis**: Identifies where in the reasoning process errors occur and why
 
 ### Usage:
 ```bash
