@@ -230,9 +230,13 @@ class DiagnosticEvaluator:
         
         return prompt
     
-    def query_llm(self, prompt: str) -> str:
+    def query_llm(self, prompt: str, max_tokens: int = None) -> str:
         """Query the LLM with the given prompt"""
-        response = self.model_provider.query(prompt, max_tokens=100)
+        # Default to generous token limit for diagnostic reasoning
+        if max_tokens is None:
+            max_tokens = 500  # Generous default for complex diagnostic responses
+        
+        response = self.model_provider.query(prompt, max_tokens=max_tokens)
         
         if response.success:
             # For models with thinking mode, show thinking content if available
@@ -243,9 +247,13 @@ class DiagnosticEvaluator:
             print(f"Error querying LLM: {response.error}")
             return ""
     
-    async def query_llm_async(self, prompt: str, request_id: str = None) -> Dict:
+    async def query_llm_async(self, prompt: str, request_id: str = None, max_tokens: int = None) -> Dict:
         """Async query the LLM with the given prompt"""
-        response = await self.model_provider.query_async(prompt, request_id=request_id, max_tokens=100)
+        # Default to generous token limit for diagnostic reasoning
+        if max_tokens is None:
+            max_tokens = 500  # Generous default for complex diagnostic responses
+        
+        response = await self.model_provider.query_async(prompt, request_id=request_id, max_tokens=max_tokens)
         
         result = {
             'request_id': request_id,
@@ -347,7 +355,8 @@ Answer:"""
         if iterative_reasoning:
             # Step 1: Category selection (same as two-step)
             category_prompt = self.create_category_selection_prompt(sample, num_inputs, num_categories)
-            category_response = self.query_llm(category_prompt)
+            # Category selection with detailed reasoning needs generous token limit
+            category_response = self.query_llm(category_prompt, max_tokens=800)
             selected_categories = self.parse_selected_categories(category_response, num_categories)
             
             # Evaluate category selection accuracy
@@ -395,7 +404,8 @@ Answer:"""
         elif two_step_reasoning:
             # Step 1: Category selection
             category_prompt = self.create_category_selection_prompt(sample, num_inputs, num_categories)
-            category_response = self.query_llm(category_prompt)
+            # Category selection with detailed reasoning needs generous token limit
+            category_response = self.query_llm(category_prompt, max_tokens=800)
             selected_categories = self.parse_selected_categories(category_response, num_categories)
             
             # Evaluate category selection accuracy
@@ -411,7 +421,8 @@ Answer:"""
             
             # Step 2: Final diagnosis with flowcharts
             final_prompt = self.create_two_step_final_prompt(sample, num_inputs, selected_categories)
-            predicted = self.query_llm(final_prompt)
+            # Final diagnosis reasoning needs generous token limit  
+            predicted = self.query_llm(final_prompt, max_tokens=600)
             
             if self.show_responses:
                 print(f"Final Diagnosis Response: '{predicted}'")
@@ -420,7 +431,8 @@ Answer:"""
         else:
             # Standard single-step evaluation
             prompt = self.create_prompt(sample, num_inputs, provide_diagnosis_list)
-            predicted = self.query_llm(prompt)
+            # Standard diagnostic responses need reasonable token limit
+            predicted = self.query_llm(prompt, max_tokens=500)
             
             # No category selection in single-step mode
             selected_categories = []
@@ -956,7 +968,7 @@ Answer:"""
             category_prompt = self.create_initial_category_selection_prompt(
                 patient_summary, selected_categories, flowcharts
             )
-            category_response = self.query_llm(category_prompt)
+            category_response = self.query_llm(category_prompt, max_tokens=800)
             current_category = self.parse_category_selection(category_response, selected_categories)
         
         if current_category not in flowcharts:
@@ -1023,7 +1035,8 @@ Answer:"""
             )
             
             # Get LLM response
-            step_response = self.query_llm(step_prompt)
+            # Iterative reasoning steps need large token limit for evidence matching and comparative analysis
+            step_response = self.query_llm(step_prompt, max_tokens=1200)
             
             # Parse the choice and reasoning
             reasoning_result = extract_reasoning_choice(step_response, children)
@@ -1148,7 +1161,7 @@ Answer:"""
             category_prompt = self.create_initial_category_selection_prompt(
                 patient_summary, selected_categories, flowcharts
             )
-            result = await self.query_llm_async(category_prompt, f"category_selection")
+            result = await self.query_llm_async(category_prompt, f"category_selection", max_tokens=200)
             if result['success']:
                 current_category = self.parse_category_selection(result['response'], selected_categories)
             else:
@@ -1218,7 +1231,8 @@ Answer:"""
             )
             
             # Async API call for reasoning step
-            result = await self.query_llm_async(step_prompt, f"reasoning_step_{current_step}")
+            # Iterative reasoning steps need large token limit for evidence matching and comparative analysis
+            result = await self.query_llm_async(step_prompt, f"reasoning_step_{current_step}", max_tokens=1200)
             
             if result['success']:
                 step_response = result['response']
@@ -1277,7 +1291,7 @@ Answer:"""
         if iterative_reasoning:
             # Step 1: Category selection
             category_prompt = self.create_category_selection_prompt(sample, num_inputs, num_categories)
-            category_call = self.query_llm_async(category_prompt, f"category_{sample_path}")
+            category_call = self.query_llm_async(category_prompt, f"category_{sample_path}", max_tokens=800)
             api_calls.append(('category_selection', category_call))
             
             # We'll do iterative reasoning after category selection
@@ -1285,7 +1299,7 @@ Answer:"""
         elif two_step_reasoning:
             # Step 1: Category selection  
             category_prompt = self.create_category_selection_prompt(sample, num_inputs, num_categories)
-            category_call = self.query_llm_async(category_prompt, f"category_{sample_path}")
+            category_call = self.query_llm_async(category_prompt, f"category_{sample_path}", max_tokens=800)
             api_calls.append(('category_selection', category_call))
             
             # Step 2 will be done after category selection
@@ -1293,7 +1307,7 @@ Answer:"""
         else:
             # Standard single-step evaluation
             prompt = self.create_prompt(sample, num_inputs, provide_diagnosis_list)
-            main_call = self.query_llm_async(prompt, f"main_{sample_path}")
+            main_call = self.query_llm_async(prompt, f"main_{sample_path}", max_tokens=500)
             api_calls.append(('main_prediction', main_call))
         
         # Execute the first batch of API calls
@@ -1339,12 +1353,8 @@ Answer:"""
                 
                 # Step 2: Final diagnosis with flowcharts
                 final_prompt = self.create_two_step_final_prompt(sample, num_inputs, selected_categories)
-                final_result = await self.query_llm_async(final_prompt, f"final_{sample_path}")
-                
-                if final_result['success']:
-                    predicted = final_result['response']
-                else:
-                    predicted = ""
+                # Final diagnosis reasoning needs generous token limit  
+                predicted = self.query_llm(final_prompt, max_tokens=600)
             else:
                 # Fallback if category selection failed
                 category_response = ""

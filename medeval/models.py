@@ -71,7 +71,7 @@ class OpenAIProvider(ModelProvider):
                     {"role": "system", "content": "You are a medical expert providing diagnostic assessments."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=kwargs.get('max_tokens', 100),
+                max_tokens=kwargs.get('max_tokens', 500),
                 temperature=kwargs.get('temperature', 0.1)
             )
             return ModelResponse(
@@ -97,7 +97,7 @@ class OpenAIProvider(ModelProvider):
                     {"role": "system", "content": "You are a medical expert providing diagnostic assessments."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=kwargs.get('max_tokens', 100),
+                max_tokens=kwargs.get('max_tokens', 500),
                 temperature=kwargs.get('temperature', 0.1)
             )
             return ModelResponse(
