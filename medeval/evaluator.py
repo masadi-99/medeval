@@ -32,6 +32,12 @@ from .utils import (
     extract_reasoning_choice
 )
 
+from .models import (
+    create_model_provider,
+    PREDEFINED_MODELS,
+    ModelResponse
+)
+
 
 @dataclass
 class RateLimiter:
@@ -68,25 +74,31 @@ class DiagnosticEvaluator:
     Main class for evaluating LLMs on diagnostic reasoning tasks
     """
     
-    def __init__(self, api_key: str, model: str = "gpt-4o-mini", 
+    def __init__(self, api_key: str = None, model: str = "gpt-4o-mini", 
                  flowchart_dir: str = None, samples_dir: str = None,
                  use_llm_judge: bool = True, show_responses: bool = False,
-                 max_concurrent: int = 10):
+                 max_concurrent: int = 10, 
+                 # New parameters for model provider system
+                 provider: str = "auto", huggingface_token: str = None,
+                 device: str = "auto", torch_dtype: str = "auto",
+                 thinking_mode: bool = True):
         """
         Initialize the diagnostic evaluator
         
         Args:
-            api_key: OpenAI API key
-            model: Model to use for evaluation
+            api_key: OpenAI API key (for OpenAI models)
+            model: Model name or predefined model key
             flowchart_dir: Directory containing diagnostic flowcharts (optional)
             samples_dir: Directory containing samples (optional)
             use_llm_judge: Whether to use LLM as a judge for evaluation
             show_responses: Whether to print LLM responses during evaluation
             max_concurrent: Maximum number of concurrent API calls
+            provider: Model provider ("auto", "openai", "huggingface", "huggingface_api")
+            huggingface_token: HuggingFace API token (for HF API models)
+            device: Device for local models ("auto", "cpu", "cuda", etc.)
+            torch_dtype: Torch dtype for local models ("auto", "float16", "bfloat16")
+            thinking_mode: Enable thinking mode for compatible models (like Qwen3)
         """
-        self.client = openai.OpenAI(api_key=api_key)
-        self.async_client = openai.AsyncOpenAI(api_key=api_key)
-        self.model = model
         self.flowchart_dir = flowchart_dir
         self.samples_dir = samples_dir
         self.possible_diagnoses = load_possible_diagnoses(flowchart_dir)
@@ -95,6 +107,84 @@ class DiagnosticEvaluator:
         self.show_responses = show_responses
         self.max_concurrent = max_concurrent
         self.rate_limiter = RateLimiter()
+        
+        # Determine model configuration
+        self.model_name = model
+        self.provider_type = provider
+        
+        # Check if model is in predefined configurations
+        if model in PREDEFINED_MODELS:
+            model_config = PREDEFINED_MODELS[model].copy()
+            self.provider_type = model_config.get('provider', provider)
+            print(f"Using predefined model configuration: {model}")
+            print(f"Provider: {self.provider_type}")
+            if 'model_name' in model_config:
+                print(f"Model: {model_config['model_name']}")
+            if model_config.get('thinking_mode') is not None:
+                thinking_mode = model_config['thinking_mode']
+                print(f"Thinking mode: {thinking_mode}")
+        else:
+            model_config = {}
+        
+        # Auto-detect provider if not specified
+        if self.provider_type == "auto":
+            if model.startswith(('gpt-', 'o1-')):
+                self.provider_type = "openai"
+            elif "/" in model:  # HuggingFace model format
+                self.provider_type = "huggingface"
+            else:
+                self.provider_type = "openai"  # Default fallback
+        
+        # Create model provider
+        if self.provider_type == "openai":
+            if not api_key:
+                import os
+                api_key = os.getenv('OPENAI_API_KEY')
+                if not api_key:
+                    raise ValueError("OpenAI API key required for OpenAI models")
+            
+            self.model_provider = create_model_provider(
+                "openai",
+                api_key=api_key,
+                model=model_config.get('model', model),
+                rate_limiter=self.rate_limiter
+            )
+            
+        elif self.provider_type == "huggingface":
+            self.model_provider = create_model_provider(
+                "huggingface",
+                model_name=model_config.get('model_name', model),
+                device=device,
+                torch_dtype=torch_dtype,
+                thinking_mode=thinking_mode,
+                max_length=model_config.get('max_length', 32768)
+            )
+            
+        elif self.provider_type == "huggingface_api":
+            if not huggingface_token:
+                import os
+                huggingface_token = os.getenv('HUGGINGFACE_TOKEN')
+                if not huggingface_token:
+                    raise ValueError("HuggingFace token required for HuggingFace API models")
+            
+            self.model_provider = create_model_provider(
+                "huggingface_api",
+                model_name=model_config.get('model_name', model),
+                api_token=huggingface_token,
+                thinking_mode=thinking_mode
+            )
+        else:
+            raise ValueError(f"Unknown provider: {self.provider_type}")
+        
+        # For backward compatibility, keep these references
+        self.model = self.model_name
+        
+        print(f"Initialized DiagnosticEvaluator with {self.provider_type} provider")
+        if hasattr(self.model_provider, 'thinking_mode'):
+            print(f"Thinking mode: {self.model_provider.thinking_mode}")
+        print(f"Concurrent requests supported: {self.model_provider.supports_concurrent()}")
+        print(f"Found {len(self.possible_diagnoses)} possible diagnoses")
+        print(f"Found {len(self.flowchart_categories)} disease categories")
         
     def create_prompt(self, sample: Dict, num_inputs: int, 
                       provide_diagnosis_list: bool) -> str:
@@ -142,48 +232,33 @@ class DiagnosticEvaluator:
     
     def query_llm(self, prompt: str) -> str:
         """Query the LLM with the given prompt"""
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are a medical expert providing diagnostic assessments."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=100,
-                temperature=0.1
-            )
-            return response.choices[0].message.content.strip()
-        except Exception as e:
-            print(f"Error querying LLM: {e}")
+        response = self.model_provider.query(prompt, max_tokens=100)
+        
+        if response.success:
+            # For models with thinking mode, show thinking content if available
+            if response.thinking_content and self.show_responses:
+                print(f"🧠 Model thinking: {response.thinking_content[:200]}...")
+            return response.content
+        else:
+            print(f"Error querying LLM: {response.error}")
             return ""
     
     async def query_llm_async(self, prompt: str, request_id: str = None) -> Dict:
-        """Async query the LLM with the given prompt and rate limiting"""
-        await self.rate_limiter.wait_if_needed()
+        """Async query the LLM with the given prompt"""
+        response = await self.model_provider.query_async(prompt, request_id=request_id, max_tokens=100)
         
-        try:
-            response = await self.async_client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are a medical expert providing diagnostic assessments."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=100,
-                temperature=0.1
-            )
-            return {
-                'request_id': request_id,
-                'response': response.choices[0].message.content.strip(),
-                'success': True,
-                'error': None
-            }
-        except Exception as e:
-            return {
-                'request_id': request_id,
-                'response': "",
-                'success': False,
-                'error': str(e)
-            }
+        result = {
+            'request_id': request_id,
+            'response': response.content if response.success else "",
+            'success': response.success,
+            'error': response.error
+        }
+        
+        # Add thinking content if available
+        if response.thinking_content:
+            result['thinking_content'] = response.thinking_content
+        
+        return result
     
     def create_judge_prompt(self, predicted: str, ground_truth: str) -> str:
         """Create prompt for LLM judge to evaluate if prediction matches ground truth"""
@@ -212,22 +287,13 @@ Answer:"""
         
         judge_prompt = self.create_judge_prompt(predicted, ground_truth)
         
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are a medical expert judge evaluating diagnostic equivalence."},
-                    {"role": "user", "content": judge_prompt}
-                ],
-                max_tokens=10,
-                temperature=0.0
-            )
-            
-            judge_response = response.choices[0].message.content.strip().upper()
+        response = self.model_provider.query(judge_prompt, max_tokens=10, temperature=0.0)
+        
+        if response.success:
+            judge_response = response.content.strip().upper()
             return judge_response == "YES"
-            
-        except Exception as e:
-            print(f"Error in LLM judge evaluation: {e}")
+        else:
+            print(f"Error in LLM judge evaluation: {response.error}")
             # Fallback to exact match
             return predicted.strip().lower() == ground_truth.strip().lower()
     

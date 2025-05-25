@@ -22,8 +22,28 @@ from .utils import (
 def main():
     """Main CLI entry point for evaluation"""
     parser = argparse.ArgumentParser(description='Evaluate LLM on diagnostic reasoning tasks')
+    
+    # Model selection arguments
+    parser.add_argument('--model', default='gpt-4o-mini', 
+                       help='Model name (e.g., gpt-4o-mini, qwen3-30b, Qwen/Qwen3-30B-A3B)')
+    parser.add_argument('--provider', choices=['auto', 'openai', 'huggingface', 'huggingface_api'], 
+                       default='auto', help='Model provider (auto-detected by default)')
+    
+    # API keys and authentication
     parser.add_argument('--api-key', help='OpenAI API key (uses OPENAI_API_KEY env var if not provided)')
-    parser.add_argument('--model', default='gpt-4o-mini', help='Model to use')
+    parser.add_argument('--huggingface-token', help='HuggingFace token (uses HUGGINGFACE_TOKEN env var if not provided)')
+    
+    # Model-specific arguments
+    parser.add_argument('--device', default='auto', 
+                       help='Device for local models (auto, cpu, cuda, etc.)')
+    parser.add_argument('--torch-dtype', default='auto', 
+                       help='Torch dtype for local models (auto, float16, bfloat16)')
+    parser.add_argument('--thinking-mode', action='store_true', default=True,
+                       help='Enable thinking mode for compatible models (default: True)')
+    parser.add_argument('--no-thinking-mode', action='store_true',
+                       help='Disable thinking mode')
+    
+    # Evaluation arguments
     parser.add_argument('--num-inputs', type=int, default=6, choices=range(1, 7),
                        help='Number of input fields to use (1-6)')
     parser.add_argument('--provide-list', action='store_true', default=True,
@@ -41,6 +61,8 @@ def main():
                        help='Use LLM as judge for evaluation (default: True)')
     parser.add_argument('--no-llm-judge', action='store_true',
                        help='Disable LLM judge and use exact string matching')
+    
+    # Reasoning mode arguments
     parser.add_argument('--two-step', action='store_true',
                        help='Use two-step diagnostic reasoning (category selection then final diagnosis)')
     parser.add_argument('--num-categories', type=int, default=3,
@@ -49,6 +71,8 @@ def main():
                        help='Use iterative step-by-step reasoning following flowcharts to final diagnosis')
     parser.add_argument('--max-reasoning-steps', type=int, default=5,
                        help='Maximum number of reasoning steps in iterative mode (default: 5)')
+    
+    # Concurrency arguments
     parser.add_argument('--concurrent', action='store_true',
                        help='Use concurrent processing for faster evaluation (recommended for large datasets)')
     parser.add_argument('--max-concurrent', type=int, default=10,
@@ -56,13 +80,12 @@ def main():
     
     args = parser.parse_args()
     
-    # Get API key from argument or environment variable
+    # Handle thinking mode
+    thinking_mode = args.thinking_mode and not args.no_thinking_mode
+    
+    # Get API keys from arguments or environment variables
     api_key = args.api_key or os.getenv('OPENAI_API_KEY')
-    if not api_key:
-        print("❌ Error: OpenAI API key required")
-        print("   Set OPENAI_API_KEY environment variable or use --api-key argument")
-        print("   export OPENAI_API_KEY='your-api-key-here'")
-        return
+    huggingface_token = args.huggingface_token or os.getenv('HUGGINGFACE_TOKEN')
     
     provide_list = args.provide_list and not args.no_list
     use_llm_judge = args.use_llm_judge and not args.no_llm_judge
@@ -80,15 +103,28 @@ def main():
         print("❌ Error: Cannot use both --two-step and --iterative modes simultaneously")
         return
     
+    # Show available predefined models
+    if args.model == "list":
+        from .models import PREDEFINED_MODELS
+        print("Available predefined models:")
+        for name, config in PREDEFINED_MODELS.items():
+            print(f"  {name}: {config.get('model_name', config.get('model', name))} ({config['provider']})")
+        return
+    
     try:
         evaluator = DiagnosticEvaluator(
-            api_key=api_key, 
+            api_key=api_key,
             model=args.model,
             flowchart_dir=args.flowchart_dir,
             samples_dir=args.samples_dir,
             use_llm_judge=use_llm_judge,
             show_responses=args.show_responses,
-            max_concurrent=args.max_concurrent
+            max_concurrent=args.max_concurrent,
+            provider=args.provider,
+            huggingface_token=huggingface_token,
+            device=args.device,
+            torch_dtype=args.torch_dtype,
+            thinking_mode=thinking_mode
         )
         
         if args.concurrent:
@@ -192,7 +228,17 @@ def main():
 def demo_main():
     """Demo CLI entry point"""
     parser = argparse.ArgumentParser(description='Run demo of LLM diagnostic evaluator')
+    parser.add_argument('--model', default='gpt-4o-mini', 
+                       help='Model name (e.g., gpt-4o-mini, qwen3-30b)')
+    parser.add_argument('--provider', choices=['auto', 'openai', 'huggingface', 'huggingface_api'], 
+                       default='auto', help='Model provider (auto-detected by default)')
     parser.add_argument('--api-key', help='OpenAI API key (uses OPENAI_API_KEY env var if not provided)')
+    parser.add_argument('--huggingface-token', help='HuggingFace token (uses HUGGINGFACE_TOKEN env var if not provided)')
+    parser.add_argument('--device', default='auto', help='Device for local models')
+    parser.add_argument('--thinking-mode', action='store_true', default=True,
+                       help='Enable thinking mode for compatible models')
+    parser.add_argument('--no-thinking-mode', action='store_true',
+                       help='Disable thinking mode')
     parser.add_argument('--samples-dir', help='Custom samples directory')
     parser.add_argument('--flowchart-dir', help='Custom flowchart directory')
     parser.add_argument('--show-responses', action='store_true',
@@ -200,21 +246,32 @@ def demo_main():
     
     args = parser.parse_args()
     
-    # Get API key from argument or environment variable
+    # Handle thinking mode
+    thinking_mode = args.thinking_mode and not args.no_thinking_mode
+    
+    # Get API keys from arguments or environment variables
     api_key = args.api_key or os.getenv('OPENAI_API_KEY')
-    if not api_key:
-        print("❌ Error: OpenAI API key required")
-        print("   Set OPENAI_API_KEY environment variable or use --api-key argument")
-        print("   export OPENAI_API_KEY='your-api-key-here'")
-        return
+    huggingface_token = args.huggingface_token or os.getenv('HUGGINGFACE_TOKEN')
     
     try:
-        run_demo(api_key, args.samples_dir, args.flowchart_dir, args.show_responses)
+        run_demo(
+            api_key=api_key, 
+            model=args.model,
+            provider=args.provider,
+            huggingface_token=huggingface_token,
+            device=args.device,
+            thinking_mode=thinking_mode,
+            samples_dir=args.samples_dir, 
+            flowchart_dir=args.flowchart_dir, 
+            show_responses=args.show_responses
+        )
     except Exception as e:
         print(f"❌ Error running demo: {e}")
 
 
-def run_demo(api_key: str, samples_dir: str = None, flowchart_dir: str = None, show_responses: bool = False):
+def run_demo(api_key: str = None, model: str = "gpt-4o-mini", provider: str = "auto",
+             huggingface_token: str = None, device: str = "auto", thinking_mode: bool = True,
+             samples_dir: str = None, flowchart_dir: str = None, show_responses: bool = False):
     """Run a demo evaluation with a small subset of samples"""
     
     print("🏥 LLM Diagnostic Reasoning Evaluator Demo")
@@ -223,11 +280,15 @@ def run_demo(api_key: str, samples_dir: str = None, flowchart_dir: str = None, s
     # Initialize evaluator
     evaluator = DiagnosticEvaluator(
         api_key=api_key, 
-        model="gpt-4o-mini",
+        model=model,
         flowchart_dir=flowchart_dir,
         samples_dir=samples_dir,
         use_llm_judge=True,
-        show_responses=show_responses
+        show_responses=show_responses,
+        provider=provider,
+        huggingface_token=huggingface_token,
+        device=device,
+        thinking_mode=thinking_mode
     )
     
     print(f"📋 Found {len(evaluator.possible_diagnoses)} possible diagnoses")

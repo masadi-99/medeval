@@ -8,6 +8,9 @@ This framework evaluates LLMs on their ability to provide primary discharge diag
 
 ## Features
 
+- **Multi-Model Support**: OpenAI models (GPT-4, GPT-3.5) and Hugging Face models (Qwen3-30B, Llama3, Mistral, etc.)
+- **Local and API Inference**: Run models locally or via APIs for flexibility and cost control
+- **Thinking Mode Support**: Special support for Qwen3's thinking/non-thinking modes for enhanced reasoning
 - **Configurable Input Fields**: Choose which clinical information to provide (1-6 inputs)
 - **Diagnosis List Toggle**: Option to provide or withhold the list of possible diagnoses
 - **Two-Step Reasoning**: Advanced diagnostic reasoning with category selection followed by final diagnosis
@@ -17,9 +20,10 @@ This framework evaluates LLMs on their ability to provide primary discharge diag
 - **Comprehensive Metrics**: Accuracy, precision, recall, and F1-score
 - **Per-class Analysis**: Detailed performance metrics for each diagnosis
 - **Disease Category Metrics**: Performance breakdown by medical specialty/disease category
+- **Concurrent Processing**: Fast evaluation with rate-limited concurrent API calls
 - **Flexible Evaluation**: Support for different models and sample sizes
 - **Easy Installation**: Install as a Python package with pip
-- **Environment Integration**: Uses standard OpenAI environment variables
+- **Environment Integration**: Uses standard environment variables for API keys
 
 ## Installation
 
@@ -37,6 +41,18 @@ pip install -e .
 pip install git+https://github.com/mohammadasadi/medeval.git
 ```
 
+### Optional Dependencies
+
+For Hugging Face models (local inference):
+```bash
+pip install transformers torch accelerate
+```
+
+For async operations with Hugging Face API:
+```bash
+pip install aiohttp
+```
+
 ### Verify Installation
 
 ```bash
@@ -44,20 +60,39 @@ pip install git+https://github.com/mohammadasadi/medeval.git
 medeval --help
 medeval-demo --help
 medeval-show --help
+
+# List available predefined models
+medeval --model list
 ```
 
 ## Quick Start
 
-### 1. Set up your OpenAI API key
+### 1. Set up your API keys
 
+For OpenAI models:
 ```bash
 export OPENAI_API_KEY='your-openai-api-key-here'
+```
+
+For Hugging Face API models:
+```bash
+export HUGGINGFACE_TOKEN='your-huggingface-token-here'
 ```
 
 ### 2. Run a quick demo
 
 ```bash
+# Demo with OpenAI GPT-4o-mini (default)
 medeval-demo
+
+# Demo with Qwen3-30B (local inference) - requires GPU and transformers
+medeval-demo --model qwen3-30b --show-responses
+
+# Demo with Qwen3 via Hugging Face API
+medeval-demo --model Qwen/Qwen3-30B-A3B --provider huggingface
+
+# Demo with custom model
+medeval-demo --model meta-llama/Meta-Llama-3-8B-Instruct --provider huggingface
 ```
 
 ### 3. Analyze the dataset
@@ -66,10 +101,24 @@ medeval-demo
 medeval-show
 ```
 
-### 4. Run a full evaluation
+### 4. Run evaluations with different models
 
 ```bash
-medeval --max-samples 50
+# OpenAI models
+medeval --model gpt-4o-mini --max-samples 50
+medeval --model gpt-4o --max-samples 20
+
+# Qwen3 with thinking mode (local inference)
+medeval --model qwen3-30b --max-samples 20 --thinking-mode
+
+# Qwen3 without thinking mode (faster)
+medeval --model qwen3-30b-no-thinking --max-samples 50
+
+# Custom Hugging Face model
+medeval --model Qwen/Qwen3-30B-A3B --provider huggingface --max-samples 20
+
+# Large-scale evaluation with concurrent processing
+medeval --model qwen3-30b --concurrent --max-samples 200
 ```
 
 ## Dataset Structure
@@ -91,6 +140,56 @@ The framework supports 61 primary discharge diagnoses across 25 medical categori
 - Stroke (Ischemic, Hemorrhagic)
 - Diabetes (Type I, Type II)
 - And many more...
+
+## Supported Models
+
+### OpenAI Models
+- **gpt-4o**: Latest GPT-4 optimized model
+- **gpt-4o-mini**: Faster, cost-effective GPT-4 model (default)
+- **gpt-4-turbo**: High-performance GPT-4 variant
+- **gpt-3.5-turbo**: Cost-effective option
+
+### Hugging Face Models (Local Inference)
+
+#### Qwen3 Series (Recommended)
+- **qwen3-30b**: [Qwen3-30B-A3B](https://huggingface.co/Qwen/Qwen3-30B-A3B) with thinking mode enabled
+- **qwen3-30b-no-thinking**: Same model with thinking mode disabled for faster inference
+
+**Special Features of Qwen3:**
+- **Thinking Mode**: Model generates internal reasoning (`<think>...</think>`) before final answer
+- **Medical Reasoning**: Excellent performance on complex diagnostic reasoning tasks
+- **Context Length**: 32,768 tokens natively (extendable to 131,072 with YaRN)
+- **Optimized Parameters**: Automatic temperature/sampling settings based on mode
+
+#### Other Popular Models
+- **llama3-8b**: Meta-Llama-3-8B-Instruct
+- **mistral-7b**: Mistral-7B-Instruct-v0.3
+- **Custom Models**: Any Hugging Face model with chat template support
+
+### Hugging Face API Models
+Access any Hugging Face model via their Inference API (requires HuggingFace token):
+```bash
+medeval --model Qwen/Qwen3-30B-A3B --provider huggingface_api
+```
+
+### Model Selection Guide
+
+**For Best Performance:**
+- **Qwen3-30B** (thinking mode): Best for complex diagnostic reasoning
+- **GPT-4o**: Excellent general performance with good speed
+
+**For Speed/Cost:**
+- **Qwen3-30B** (non-thinking): Fast inference with good accuracy
+- **GPT-4o-mini**: Fast and cost-effective
+
+**For Local/Private Use:**
+- Any Hugging Face model with local inference
+- No API calls, complete data privacy
+
+**Hardware Requirements for Local Models:**
+- **Qwen3-30B**: Requires 16-24GB GPU memory (30.5B parameters, MoE architecture)
+- **Llama3-8B**: Requires 8-12GB GPU memory
+- **Mistral-7B**: Requires 6-10GB GPU memory
 
 ## Usage
 
@@ -180,8 +279,18 @@ evaluator.save_results(results, "my_results.json")
 
 | Argument | Description | Default |
 |----------|-------------|---------|
+| **Model Selection** | | |
+| `--model` | Model name or predefined model key | gpt-4o-mini |
+| `--provider` | Model provider (auto, openai, huggingface, huggingface_api) | auto |
+| **Authentication** | | |
 | `--api-key` | OpenAI API key | Uses `OPENAI_API_KEY` env var |
-| `--model` | Model to use | gpt-4o-mini |
+| `--huggingface-token` | HuggingFace token | Uses `HUGGINGFACE_TOKEN` env var |
+| **Model Configuration** | | |
+| `--device` | Device for local models (auto, cpu, cuda) | auto |
+| `--torch-dtype` | Torch dtype (auto, float16, bfloat16) | auto |
+| `--thinking-mode` | Enable thinking mode for compatible models | True |
+| `--no-thinking-mode` | Disable thinking mode | False |
+| **Evaluation Options** | | |
 | `--num-inputs` | Number of input fields (1-6) | 6 |
 | `--provide-list` | Provide diagnosis list | True |
 | `--no-list` | Don't provide diagnosis list | False |
@@ -192,10 +301,12 @@ evaluator.save_results(results, "my_results.json")
 | `--show-responses` | Show actual LLM responses | False |
 | `--use-llm-judge` | Use LLM as judge for evaluation | True |
 | `--no-llm-judge` | Use exact string matching | False |
+| **Reasoning Modes** | | |
 | `--two-step` | Use two-step diagnostic reasoning | False |
 | `--num-categories` | Number of categories to select in two-step mode | 3 |
 | `--iterative` | Use iterative step-by-step reasoning following flowcharts | False |
 | `--max-reasoning-steps` | Maximum number of reasoning steps in iterative mode | 5 |
+| **Concurrency** | | |
 | `--concurrent` | Use concurrent processing for faster evaluation | False |
 | `--max-concurrent` | Maximum number of concurrent API calls | 10 |
 
@@ -365,6 +476,79 @@ This framework enables investigation of various research questions:
 7. **Category Selection**: How well can LLMs identify relevant disease categories?
 8. **Iterative Reasoning**: How does step-by-step flowchart traversal affect diagnostic accuracy?
 9. **Reasoning Path Analysis**: Do models follow diagnostically sound reasoning paths?
+10. **Thinking Mode Impact**: How does Qwen3's thinking mode affect diagnostic performance?
+11. **Local vs API Models**: Performance comparison between local and API-based inference?
+
+## Model Usage Examples
+
+### OpenAI Models
+```bash
+# GPT-4o for high accuracy
+medeval --model gpt-4o --max-samples 100
+
+# GPT-4o-mini for faster evaluation
+medeval --model gpt-4o-mini --max-samples 500 --concurrent
+
+# Compare OpenAI models
+medeval --model gpt-4o --max-samples 50 --output gpt4o_results.json
+medeval --model gpt-4o-mini --max-samples 50 --output gpt4o_mini_results.json
+```
+
+### Qwen3 Models (Local Inference)
+```bash
+# Qwen3 with thinking mode (best for complex reasoning)
+medeval --model qwen3-30b --thinking-mode --max-samples 50 --show-responses
+
+# Qwen3 without thinking mode (faster)
+medeval --model qwen3-30b-no-thinking --max-samples 100
+
+# Qwen3 with iterative reasoning (most sophisticated)
+medeval --model qwen3-30b --iterative --thinking-mode --max-samples 20
+
+# Qwen3 concurrent evaluation
+medeval --model qwen3-30b --concurrent --max-concurrent 5 --max-samples 200
+
+# Custom device/precision settings
+medeval --model qwen3-30b --device cuda:0 --torch-dtype bfloat16 --max-samples 50
+```
+
+### Hugging Face API Models
+```bash
+# Access any Hugging Face model via API
+export HUGGINGFACE_TOKEN='your-token-here'
+
+medeval --model Qwen/Qwen3-30B-A3B --provider huggingface_api --max-samples 50
+medeval --model meta-llama/Meta-Llama-3-8B-Instruct --provider huggingface_api --max-samples 50
+medeval --model mistralai/Mistral-7B-Instruct-v0.3 --provider huggingface_api --max-samples 50
+```
+
+### Custom Model Configurations
+```bash
+# Load any Hugging Face model locally
+medeval --model microsoft/DialoGPT-medium --provider huggingface --max-samples 20
+
+# Custom model with specific settings
+medeval --model Qwen/Qwen3-30B-A3B --provider huggingface \
+        --device cuda:1 --torch-dtype float16 --thinking-mode --max-samples 30
+
+# Model comparison study
+for model in qwen3-30b gpt-4o-mini llama3-8b; do
+    medeval --model $model --max-samples 100 --output "${model}_results.json"
+done
+```
+
+### Thinking Mode Evaluation
+```bash
+# Compare thinking vs non-thinking modes
+medeval --model qwen3-30b --thinking-mode --max-samples 50 \
+        --output qwen3_thinking_results.json
+
+medeval --model qwen3-30b --no-thinking-mode --max-samples 50 \
+        --output qwen3_no_thinking_results.json
+
+# Show thinking content during evaluation
+medeval --model qwen3-30b --thinking-mode --show-responses --max-samples 5
+```
 
 ## Experimental Design Examples
 
