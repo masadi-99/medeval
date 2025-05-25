@@ -170,4 +170,101 @@ def collect_sample_files(samples_dir: str) -> List[str]:
 def load_sample(file_path: str) -> Dict:
     """Load a sample JSON file"""
     with open(file_path, 'r', encoding='utf-8') as f:
-        return json.load(f) 
+        return json.load(f)
+
+
+def load_flowchart_categories(flowchart_dir: str = None) -> List[str]:
+    """Load all disease category names from flowchart files"""
+    
+    flowchart_directory = get_flowchart_directory(flowchart_dir)
+    
+    categories = []
+    
+    # Get category names from JSON filenames
+    for filename in os.listdir(flowchart_directory):
+        if filename.endswith('.json'):
+            # Remove .json extension to get category name
+            category = filename[:-5]
+            categories.append(category)
+    
+    return sorted(categories)
+
+
+def load_flowchart_content(category: str, flowchart_dir: str = None) -> Dict:
+    """Load the content of a specific flowchart category"""
+    
+    flowchart_directory = get_flowchart_directory(flowchart_dir)
+    filepath = os.path.join(flowchart_directory, f"{category}.json")
+    
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"Flowchart file not found: {filepath}")
+    
+    with open(filepath, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+def format_flowchart_for_prompt(category: str, flowchart_data: Dict) -> str:
+    """Format flowchart data for inclusion in prompts"""
+    
+    formatted = f"**{category} Diagnostic Flowchart:**\n\n"
+    
+    def format_node(node, indent=0):
+        """Recursively format flowchart nodes"""
+        result = ""
+        if isinstance(node, dict):
+            for key, value in node.items():
+                result += "  " * indent + f"• {key}\n"
+                if isinstance(value, dict):
+                    result += format_node(value, indent + 1)
+                elif isinstance(value, list) and len(value) == 0:
+                    result += "  " * (indent + 1) + f"→ Final diagnosis: {key}\n"
+        return result
+    
+    # Format diagnostic tree
+    if 'diagnostic' in flowchart_data:
+        formatted += "Diagnostic Tree:\n"
+        formatted += format_node(flowchart_data['diagnostic'])
+    
+    # Format knowledge base
+    if 'knowledge' in flowchart_data:
+        formatted += "\nClinical Knowledge:\n"
+        knowledge = flowchart_data['knowledge']
+        
+        def format_knowledge(node, indent=0):
+            result = ""
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    result += "  " * indent + f"• {key}:\n"
+                    if isinstance(value, str):
+                        result += "  " * (indent + 1) + f"{value}\n"
+                    elif isinstance(value, dict):
+                        result += format_knowledge(value, indent + 1)
+            return result
+        
+        formatted += format_knowledge(knowledge)
+    
+    return formatted
+
+
+def extract_diagnoses_from_flowchart(flowchart_data: Dict) -> List[str]:
+    """Extract all possible diagnoses from a single flowchart"""
+    
+    diagnoses = []
+    
+    def extract_leaf_diagnoses(node):
+        """Recursively extract leaf diagnoses from the flowchart structure"""
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if isinstance(value, list) and len(value) == 0:  # leaf node (empty list)
+                    diagnoses.append(key)
+                elif isinstance(value, dict):
+                    extract_leaf_diagnoses(value)
+    
+    # Extract from the diagnostic tree
+    if 'diagnostic' in flowchart_data:
+        extract_leaf_diagnoses(flowchart_data['diagnostic'])
+    else:
+        # Fallback: extract all leaf nodes from the entire structure
+        extract_leaf_diagnoses(flowchart_data)
+    
+    return diagnoses 

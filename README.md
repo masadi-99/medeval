@@ -10,10 +10,12 @@ This framework evaluates LLMs on their ability to provide primary discharge diag
 
 - **Configurable Input Fields**: Choose which clinical information to provide (1-6 inputs)
 - **Diagnosis List Toggle**: Option to provide or withhold the list of possible diagnoses
+- **Two-Step Reasoning**: Advanced diagnostic reasoning with category selection followed by final diagnosis
 - **LLM Judge**: Use an LLM to evaluate diagnostic equivalence (handles different wording/synonyms)
 - **Response Inspection**: Option to show actual LLM responses during evaluation
 - **Comprehensive Metrics**: Accuracy, precision, recall, and F1-score
 - **Per-class Analysis**: Detailed performance metrics for each diagnosis
+- **Disease Category Metrics**: Performance breakdown by medical specialty/disease category
 - **Flexible Evaluation**: Support for different models and sample sizes
 - **Easy Installation**: Install as a Python package with pip
 - **Environment Integration**: Uses standard OpenAI environment variables
@@ -113,6 +115,12 @@ medeval --show-responses --max-samples 10
 # Use exact string matching instead of LLM judge
 medeval --no-llm-judge --max-samples 50
 
+# Two-step diagnostic reasoning (select categories first, then diagnose)
+medeval --two-step --max-samples 50
+
+# Two-step with custom number of categories to select
+medeval --two-step --num-categories 5 --max-samples 50
+
 # Full evaluation with all samples
 medeval --output full_evaluation.json
 ```
@@ -183,6 +191,49 @@ evaluator.save_results(results, "my_results.json")
 | `--show-responses` | Show actual LLM responses | False |
 | `--use-llm-judge` | Use LLM as judge for evaluation | True |
 | `--no-llm-judge` | Use exact string matching | False |
+| `--two-step` | Use two-step diagnostic reasoning | False |
+| `--num-categories` | Number of categories to select in two-step mode | 3 |
+
+## Two-Step Diagnostic Reasoning
+
+The Two-Step Reasoning feature implements a sophisticated diagnostic approach that mimics real clinical decision-making:
+
+### How it Works:
+
+**Step 1: Category Selection**
+- LLM receives clinical data and a list of 25 disease categories (from flowcharts)
+- Selects the k most likely disease categories (default k=3)
+- Evaluated on whether the correct disease category is among selected categories
+
+**Step 2: Final Diagnosis**
+- LLM receives:
+  - Original clinical data
+  - Detailed flowcharts for the k selected categories
+  - Complete list of possible diagnoses
+- Makes final diagnostic decision using the flowchart guidance
+
+### Benefits:
+- **Structured Reasoning**: Mirrors clinical decision-making process
+- **Guided Decision Making**: Flowcharts provide structured diagnostic pathways
+- **Improved Accuracy**: Focused attention on relevant disease categories
+- **Interpretability**: Clear intermediate reasoning steps
+
+### Usage:
+```bash
+# Basic two-step reasoning (selects 3 categories)
+medeval --two-step --max-samples 50
+
+# Select more categories for broader consideration
+medeval --two-step --num-categories 5 --max-samples 50
+
+# Two-step with detailed response inspection
+medeval --two-step --show-responses --max-samples 10
+```
+
+### Output Metrics:
+- **Category Selection Accuracy**: How often the correct disease category is selected
+- **Final Diagnosis Accuracy**: Overall diagnostic accuracy
+- **Per-Category Performance**: Breakdown by disease category
 
 ## LLM Judge Feature
 
@@ -253,6 +304,8 @@ This framework enables investigation of various research questions:
 3. **Model Comparison**: How do different LLMs perform on diagnostic tasks?
 4. **Error Analysis**: What types of diagnostic errors do LLMs make most frequently?
 5. **Evaluation Methods**: How does LLM judge compare to exact string matching?
+6. **Reasoning Approaches**: How does two-step reasoning compare to direct diagnosis?
+7. **Category Selection**: How well can LLMs identify relevant disease categories?
 
 ## Experimental Design Examples
 
@@ -292,6 +345,26 @@ medeval --no-list \
 medeval --no-list --no-llm-judge \
     --max-samples 100 \
     --output results_exact_match.json
+```
+
+### Experiment 4: Two-Step vs. Direct Reasoning
+
+```bash
+# Direct reasoning
+medeval --max-samples 200 \
+    --output results_direct.json
+
+# Two-step reasoning
+medeval --two-step \
+    --max-samples 200 \
+    --output results_two_step.json
+
+# Two-step with different category counts
+for k in 2 3 5; do
+    medeval --two-step --num-categories $k \
+        --max-samples 100 \
+        --output "results_two_step_k${k}.json"
+done
 ```
 
 ## Custom Data

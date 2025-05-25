@@ -41,6 +41,10 @@ def main():
                        help='Use LLM as judge for evaluation (default: True)')
     parser.add_argument('--no-llm-judge', action='store_true',
                        help='Disable LLM judge and use exact string matching')
+    parser.add_argument('--two-step', action='store_true',
+                       help='Use two-step diagnostic reasoning (category selection then final diagnosis)')
+    parser.add_argument('--num-categories', type=int, default=3,
+                       help='Number of disease categories to select in two-step mode (default: 3)')
     
     args = parser.parse_args()
     
@@ -54,6 +58,11 @@ def main():
     
     provide_list = args.provide_list and not args.no_list
     use_llm_judge = args.use_llm_judge and not args.no_llm_judge
+    
+    # Two-step mode validation
+    if args.two_step and not provide_list:
+        print("❌ Error: Two-step mode requires --provide-list (diagnosis list must be provided)")
+        return
     
     try:
         evaluator = DiagnosticEvaluator(
@@ -69,7 +78,9 @@ def main():
             num_inputs=args.num_inputs,
             provide_diagnosis_list=provide_list,
             max_samples=args.max_samples,
-            samples_dir=args.samples_dir
+            samples_dir=args.samples_dir,
+            two_step_reasoning=args.two_step,
+            num_categories=args.num_categories
         )
         
         # Print summary
@@ -79,12 +90,19 @@ def main():
         print(f"Model: {results['configuration']['model']}")
         print(f"Number of inputs used: {results['configuration']['num_inputs']}")
         print(f"Provided diagnosis list: {results['configuration']['provide_diagnosis_list']}")
+        print(f"Two-step reasoning: {results['configuration'].get('two_step_reasoning', False)}")
+        if results['configuration'].get('two_step_reasoning'):
+            print(f"Number of categories selected: {results['configuration'].get('num_categories', 3)}")
         print(f"LLM Judge enabled: {results['configuration'].get('use_llm_judge', False)}")
         print(f"Total samples: {results['overall_metrics']['num_samples']}")
         print(f"Accuracy: {results['overall_metrics']['accuracy']:.3f}")
         print(f"Precision: {results['overall_metrics']['precision']:.3f}")
         print(f"Recall: {results['overall_metrics']['recall']:.3f}")
         print(f"F1-Score: {results['overall_metrics']['f1']:.3f}")
+        
+        # Display category selection accuracy for two-step mode
+        if results['configuration'].get('two_step_reasoning') and 'category_selection_accuracy' in results['overall_metrics']:
+            print(f"Category selection accuracy: {results['overall_metrics']['category_selection_accuracy']:.3f}")
         
         # Display disease category metrics
         if 'category_metrics' in results and results['category_metrics']:
@@ -207,6 +225,23 @@ def run_demo(api_key: str, samples_dir: str = None, flowchart_dir: str = None, s
     print(f"   Precision: {results_3['overall_metrics']['precision']:.3f}")
     print(f"   Recall: {results_3['overall_metrics']['recall']:.3f}")
     
+    # Demo 4: Two-step reasoning
+    print("\n🔬 Demo 4: Two-step reasoning (category selection + diagnosis)")
+    results_4 = evaluator.evaluate_dataset(
+        num_inputs=6,
+        provide_diagnosis_list=True,
+        max_samples=5,
+        samples_dir=samples_dir,
+        two_step_reasoning=True,
+        num_categories=3
+    )
+    
+    print(f"   Accuracy: {results_4['overall_metrics']['accuracy']:.3f}")
+    print(f"   Precision: {results_4['overall_metrics']['precision']:.3f}")
+    print(f"   Recall: {results_4['overall_metrics']['recall']:.3f}")
+    if 'category_selection_accuracy' in results_4['overall_metrics']:
+        print(f"   Category Selection Accuracy: {results_4['overall_metrics']['category_selection_accuracy']:.3f}")
+    
     # Show sample prediction
     if results_1['detailed_results']:
         sample_result = results_1['detailed_results'][0]
@@ -217,9 +252,21 @@ def run_demo(api_key: str, samples_dir: str = None, flowchart_dir: str = None, s
         if show_responses and 'predicted_raw' in sample_result:
             print(f"   Raw response: {sample_result['predicted_raw']}")
     
+    # Show two-step sample if available
+    if results_4['detailed_results']:
+        sample_result = results_4['detailed_results'][0]
+        print(f"\n📄 Two-step sample prediction:")
+        print(f"   Ground truth category: {sample_result['disease_category']}")
+        if 'selected_categories' in sample_result:
+            print(f"   Selected categories: {sample_result['selected_categories']}")
+            print(f"   Category selection correct: {sample_result['category_selection_correct']}")
+        print(f"   Final diagnosis: {sample_result['predicted_matched']}")
+        print(f"   Final diagnosis correct: {sample_result['correct']}")
+    
     print("\n✅ Demo completed!")
     print("\nTo run full evaluation, use:")
     print("medeval --max-samples 50")
+    print("medeval --two-step --max-samples 50  # For two-step reasoning")
 
 
 def show_main():
