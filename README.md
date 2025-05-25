@@ -11,6 +11,7 @@ This framework evaluates LLMs on their ability to provide primary discharge diag
 - **Configurable Input Fields**: Choose which clinical information to provide (1-6 inputs)
 - **Diagnosis List Toggle**: Option to provide or withhold the list of possible diagnoses
 - **Two-Step Reasoning**: Advanced diagnostic reasoning with category selection followed by final diagnosis
+- **Iterative Step-by-Step Reasoning**: Follow diagnostic flowcharts step-by-step to reach final diagnosis
 - **LLM Judge**: Use an LLM to evaluate diagnostic equivalence (handles different wording/synonyms)
 - **Response Inspection**: Option to show actual LLM responses during evaluation
 - **Comprehensive Metrics**: Accuracy, precision, recall, and F1-score
@@ -193,6 +194,8 @@ evaluator.save_results(results, "my_results.json")
 | `--no-llm-judge` | Use exact string matching | False |
 | `--two-step` | Use two-step diagnostic reasoning | False |
 | `--num-categories` | Number of categories to select in two-step mode | 3 |
+| `--iterative` | Use iterative step-by-step reasoning following flowcharts | False |
+| `--max-reasoning-steps` | Maximum number of reasoning steps in iterative mode | 5 |
 
 ## Two-Step Diagnostic Reasoning
 
@@ -233,6 +236,48 @@ medeval --two-step --show-responses --max-samples 10
 ### Output Metrics:
 - **Category Selection Accuracy**: How often the correct disease category is selected
 - **Final Diagnosis Accuracy**: Overall diagnostic accuracy
+- **Per-Category Performance**: Breakdown by disease category
+
+## Iterative Step-by-Step Reasoning
+
+The Iterative Step-by-Step Reasoning feature implements the most sophisticated diagnostic approach that explicitly follows diagnostic flowcharts node by node, mimicking how clinicians use structured diagnostic criteria.
+
+### How it Works:
+
+**Step 1: Category Selection**
+- LLM receives clinical data and selects k most likely disease categories (same as two-step)
+
+**Step 2: Iterative Flowchart Traversal**
+- LLM starts at the root of the selected flowchart(s)
+- At each node, LLM evaluates patient data against clinical criteria
+- Makes step-by-step decisions to move through the diagnostic tree
+- Continues until reaching a leaf node (final diagnosis)
+- Each step is guided by the flowchart structure and clinical knowledge
+
+### Benefits:
+- **Explicit Reasoning**: Every diagnostic step is recorded and interpretable
+- **Structured Decision Making**: Follows established clinical decision trees
+- **Path Validation**: Can evaluate if the reasoning path used correct disease categories
+- **Educational Value**: Shows how diagnostic criteria are applied step-by-step
+- **Error Analysis**: Identifies where in the reasoning process errors occur
+
+### Usage:
+```bash
+# Basic iterative reasoning (selects 3 categories, max 5 steps)
+medeval --iterative --max-samples 20
+
+# Custom parameters
+medeval --iterative --num-categories 5 --max-reasoning-steps 7 --max-samples 50
+
+# With detailed reasoning inspection
+medeval --iterative --show-responses --max-samples 5
+```
+
+### Output Metrics:
+- **Category Selection Accuracy**: How often the correct disease category is selected
+- **Reasoning Path Accuracy**: How often the correct disease category is used in the reasoning path
+- **Final Diagnosis Accuracy**: Overall diagnostic accuracy
+- **Average Reasoning Steps**: Average number of steps taken to reach diagnosis
 - **Per-Category Performance**: Breakdown by disease category
 
 ## LLM Judge Feature
@@ -306,6 +351,8 @@ This framework enables investigation of various research questions:
 5. **Evaluation Methods**: How does LLM judge compare to exact string matching?
 6. **Reasoning Approaches**: How does two-step reasoning compare to direct diagnosis?
 7. **Category Selection**: How well can LLMs identify relevant disease categories?
+8. **Iterative Reasoning**: How does step-by-step flowchart traversal affect diagnostic accuracy?
+9. **Reasoning Path Analysis**: Do models follow diagnostically sound reasoning paths?
 
 ## Experimental Design Examples
 
@@ -364,6 +411,34 @@ for k in 2 3 5; do
     medeval --two-step --num-categories $k \
         --max-samples 100 \
         --output "results_two_step_k${k}.json"
+done
+```
+
+### Experiment 5: Iterative Step-by-Step Reasoning
+
+```bash
+# Compare reasoning approaches
+medeval --max-samples 100 \
+    --output results_direct.json
+
+medeval --two-step --max-samples 100 \
+    --output results_two_step.json
+
+medeval --iterative --max-samples 50 \
+    --output results_iterative.json
+
+# Iterative reasoning with different parameters
+for steps in 3 5 7; do
+    medeval --iterative --max-reasoning-steps $steps \
+        --max-samples 50 \
+        --output "results_iterative_${steps}steps.json"
+done
+
+# Different category selection strategies
+for k in 2 3 5; do
+    medeval --iterative --num-categories $k \
+        --max-samples 50 \
+        --output "results_iterative_k${k}.json"
 done
 ```
 

@@ -267,4 +267,127 @@ def extract_diagnoses_from_flowchart(flowchart_data: Dict) -> List[str]:
         # Fallback: extract all leaf nodes from the entire structure
         extract_leaf_diagnoses(flowchart_data)
     
-    return diagnoses 
+    return diagnoses
+
+
+def get_flowchart_structure(flowchart_data: Dict) -> Dict:
+    """Extract the flowchart structure for iterative reasoning"""
+    
+    if 'diagnostic' in flowchart_data:
+        return flowchart_data['diagnostic']
+    return flowchart_data
+
+
+def get_flowchart_knowledge(flowchart_data: Dict) -> Dict:
+    """Extract the knowledge base from flowchart data"""
+    
+    if 'knowledge' in flowchart_data:
+        return flowchart_data['knowledge']
+    return {}
+
+
+def find_flowchart_root_nodes(flowchart_structure: Dict) -> List[str]:
+    """Find the root nodes (starting points) in a flowchart"""
+    
+    if isinstance(flowchart_structure, dict):
+        return list(flowchart_structure.keys())
+    return []
+
+
+def get_flowchart_children(flowchart_structure: Dict, node: str) -> List[str]:
+    """Get the children nodes of a specific node in the flowchart"""
+    
+    def find_children(data, target_node):
+        children = []
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if key == target_node:
+                    if isinstance(value, dict):
+                        children.extend(value.keys())
+                    elif isinstance(value, list) and len(value) == 0:
+                        # This is a leaf node
+                        children = []
+                    break
+                elif isinstance(value, dict):
+                    children.extend(find_children(value, target_node))
+        return children
+    
+    return find_children(flowchart_structure, node)
+
+
+def is_leaf_diagnosis(flowchart_structure: Dict, node: str) -> bool:
+    """Check if a node is a leaf diagnosis (final diagnosis)"""
+    
+    def check_leaf(data, target_node):
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if key == target_node:
+                    return isinstance(value, list) and len(value) == 0
+                elif isinstance(value, dict):
+                    result = check_leaf(value, target_node)
+                    if result is not None:
+                        return result
+        return None
+    
+    result = check_leaf(flowchart_structure, node)
+    return result if result is not None else False
+
+
+def format_reasoning_step(step_num: int, current_node: str, available_options: List[str], 
+                         knowledge: Dict, patient_data_summary: str) -> str:
+    """Format a single reasoning step prompt"""
+    
+    prompt = f"**Reasoning Step {step_num}:**\n\n"
+    prompt += f"Current diagnostic consideration: **{current_node}**\n\n"
+    
+    # Add knowledge about current node
+    if current_node in knowledge:
+        knowledge_text = knowledge[current_node]
+        if isinstance(knowledge_text, dict):
+            prompt += f"Clinical Information for {current_node}:\n"
+            for key, value in knowledge_text.items():
+                prompt += f"- {key}: {value}\n"
+        else:
+            prompt += f"Clinical Information: {knowledge_text}\n"
+        prompt += "\n"
+    
+    # Add patient data summary
+    prompt += f"Patient Information:\n{patient_data_summary}\n\n"
+    
+    # Add available options
+    if available_options:
+        prompt += "Based on the patient information and clinical criteria, select the next most appropriate diagnostic consideration:\n\n"
+        for i, option in enumerate(available_options, 1):
+            prompt += f"{i}. {option}\n"
+        prompt += f"\nRespond with ONLY the number (1-{len(available_options)}) of your choice.\n"
+    else:
+        prompt += "This appears to be a final diagnosis. Confirm if this is your primary discharge diagnosis.\n"
+        prompt += "Respond with 'CONFIRMED' if this is your final diagnosis, or 'RECONSIDER' if you want to explore other options.\n"
+    
+    return prompt
+
+
+def extract_reasoning_choice(response: str, available_options: List[str]) -> str:
+    """Extract the chosen option from LLM response"""
+    
+    response = response.strip()
+    
+    # Try to extract number
+    import re
+    number_match = re.search(r'\b(\d+)\b', response)
+    if number_match:
+        try:
+            choice_num = int(number_match.group(1))
+            if 1 <= choice_num <= len(available_options):
+                return available_options[choice_num - 1]
+        except ValueError:
+            pass
+    
+    # Try direct text matching
+    response_lower = response.lower()
+    for option in available_options:
+        if option.lower() in response_lower or response_lower in option.lower():
+            return option
+    
+    # Default to first option if parsing fails
+    return available_options[0] if available_options else "" 

@@ -45,6 +45,10 @@ def main():
                        help='Use two-step diagnostic reasoning (category selection then final diagnosis)')
     parser.add_argument('--num-categories', type=int, default=3,
                        help='Number of disease categories to select in two-step mode (default: 3)')
+    parser.add_argument('--iterative', action='store_true',
+                       help='Use iterative step-by-step reasoning following flowcharts to final diagnosis')
+    parser.add_argument('--max-reasoning-steps', type=int, default=5,
+                       help='Maximum number of reasoning steps in iterative mode (default: 5)')
     
     args = parser.parse_args()
     
@@ -59,9 +63,17 @@ def main():
     provide_list = args.provide_list and not args.no_list
     use_llm_judge = args.use_llm_judge and not args.no_llm_judge
     
-    # Two-step mode validation
+    # Validation for different reasoning modes
     if args.two_step and not provide_list:
         print("❌ Error: Two-step mode requires --provide-list (diagnosis list must be provided)")
+        return
+    
+    if args.iterative and not provide_list:
+        print("❌ Error: Iterative mode requires --provide-list (diagnosis list must be provided)")
+        return
+    
+    if args.two_step and args.iterative:
+        print("❌ Error: Cannot use both --two-step and --iterative modes simultaneously")
         return
     
     try:
@@ -80,7 +92,9 @@ def main():
             max_samples=args.max_samples,
             samples_dir=args.samples_dir,
             two_step_reasoning=args.two_step,
-            num_categories=args.num_categories
+            num_categories=args.num_categories,
+            iterative_reasoning=args.iterative,
+            max_reasoning_steps=args.max_reasoning_steps
         )
         
         # Print summary
@@ -93,6 +107,9 @@ def main():
         print(f"Two-step reasoning: {results['configuration'].get('two_step_reasoning', False)}")
         if results['configuration'].get('two_step_reasoning'):
             print(f"Number of categories selected: {results['configuration'].get('num_categories', 3)}")
+        print(f"Iterative reasoning: {results['configuration'].get('iterative_reasoning', False)}")
+        if results['configuration'].get('iterative_reasoning'):
+            print(f"Max reasoning steps: {results['configuration'].get('max_reasoning_steps', 5)}")
         print(f"LLM Judge enabled: {results['configuration'].get('use_llm_judge', False)}")
         print(f"Total samples: {results['overall_metrics']['num_samples']}")
         print(f"Accuracy: {results['overall_metrics']['accuracy']:.3f}")
@@ -103,6 +120,11 @@ def main():
         # Display category selection accuracy for two-step mode
         if results['configuration'].get('two_step_reasoning') and 'category_selection_accuracy' in results['overall_metrics']:
             print(f"Category selection accuracy: {results['overall_metrics']['category_selection_accuracy']:.3f}")
+        
+        # Display reasoning path accuracy for iterative mode
+        if results['configuration'].get('iterative_reasoning') and 'reasoning_path_accuracy' in results['overall_metrics']:
+            print(f"Reasoning path accuracy: {results['overall_metrics']['reasoning_path_accuracy']:.3f}")
+            print(f"Average reasoning steps: {results['overall_metrics'].get('avg_reasoning_steps', 0):.1f}")
         
         # Display disease category metrics
         if 'category_metrics' in results and results['category_metrics']:
@@ -242,6 +264,28 @@ def run_demo(api_key: str, samples_dir: str = None, flowchart_dir: str = None, s
     if 'category_selection_accuracy' in results_4['overall_metrics']:
         print(f"   Category Selection Accuracy: {results_4['overall_metrics']['category_selection_accuracy']:.3f}")
     
+    # Demo 5: Iterative step-by-step reasoning
+    print("\n🔬 Demo 5: Iterative step-by-step reasoning (following flowcharts)")
+    results_5 = evaluator.evaluate_dataset(
+        num_inputs=6,
+        provide_diagnosis_list=True,
+        max_samples=3,  # Fewer samples due to complexity
+        samples_dir=samples_dir,
+        iterative_reasoning=True,
+        num_categories=3,
+        max_reasoning_steps=4
+    )
+    
+    print(f"   Accuracy: {results_5['overall_metrics']['accuracy']:.3f}")
+    print(f"   Precision: {results_5['overall_metrics']['precision']:.3f}")
+    print(f"   Recall: {results_5['overall_metrics']['recall']:.3f}")
+    if 'category_selection_accuracy' in results_5['overall_metrics']:
+        print(f"   Category Selection Accuracy: {results_5['overall_metrics']['category_selection_accuracy']:.3f}")
+    if 'reasoning_path_accuracy' in results_5['overall_metrics']:
+        print(f"   Reasoning Path Accuracy: {results_5['overall_metrics']['reasoning_path_accuracy']:.3f}")
+    if 'avg_reasoning_steps' in results_5['overall_metrics']:
+        print(f"   Average Reasoning Steps: {results_5['overall_metrics']['avg_reasoning_steps']:.1f}")
+    
     # Show sample prediction
     if results_1['detailed_results']:
         sample_result = results_1['detailed_results'][0]
@@ -263,10 +307,24 @@ def run_demo(api_key: str, samples_dir: str = None, flowchart_dir: str = None, s
         print(f"   Final diagnosis: {sample_result['predicted_matched']}")
         print(f"   Final diagnosis correct: {sample_result['correct']}")
     
+    # Show iterative reasoning sample if available
+    if results_5['detailed_results']:
+        sample_result = results_5['detailed_results'][0]
+        print(f"\n📄 Iterative reasoning sample:")
+        print(f"   Ground truth category: {sample_result['disease_category']}")
+        if 'selected_categories' in sample_result:
+            print(f"   Selected categories: {sample_result['selected_categories']}")
+        if 'reasoning_trace' in sample_result and sample_result['reasoning_trace']:
+            print(f"   Reasoning steps: {sample_result['reasoning_steps']}")
+            print(f"   Reasoning path: {' → '.join([step.get('node', 'N/A') for step in sample_result['reasoning_trace']])}")
+        print(f"   Final diagnosis: {sample_result['predicted_matched']}")
+        print(f"   Diagnosis correct: {sample_result['correct']}")
+    
     print("\n✅ Demo completed!")
     print("\nTo run full evaluation, use:")
     print("medeval --max-samples 50")
     print("medeval --two-step --max-samples 50  # For two-step reasoning")
+    print("medeval --iterative --max-samples 20  # For iterative reasoning")
 
 
 def show_main():

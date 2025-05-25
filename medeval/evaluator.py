@@ -18,7 +18,14 @@ from .utils import (
     load_flowchart_categories,
     load_flowchart_content,
     format_flowchart_for_prompt,
-    extract_diagnoses_from_flowchart
+    extract_diagnoses_from_flowchart,
+    get_flowchart_structure,
+    get_flowchart_knowledge,
+    find_flowchart_root_nodes,
+    get_flowchart_children,
+    is_leaf_diagnosis,
+    format_reasoning_step,
+    extract_reasoning_choice
 )
 
 
@@ -183,7 +190,8 @@ Answer:"""
     
     def evaluate_sample(self, sample_path: str, num_inputs: int, 
                        provide_diagnosis_list: bool, two_step_reasoning: bool = False,
-                       num_categories: int = 3) -> Dict:
+                       num_categories: int = 3, iterative_reasoning: bool = False,
+                       max_reasoning_steps: int = 5) -> Dict:
         """
         Evaluate a single sample
         
@@ -193,6 +201,8 @@ Answer:"""
             provide_diagnosis_list: Whether to provide diagnosis list
             two_step_reasoning: Whether to use two-step reasoning
             num_categories: Number of categories to select in first step
+            iterative_reasoning: Whether to use iterative step-by-step reasoning
+            max_reasoning_steps: Maximum number of reasoning steps for iterative mode
         
         Returns:
             Dict with evaluation results
@@ -201,7 +211,44 @@ Answer:"""
         ground_truth = extract_diagnosis_from_path(sample_path)
         disease_category = extract_disease_category_from_path(sample_path)
         
-        if two_step_reasoning:
+        if iterative_reasoning:
+            # Step 1: Category selection (same as two-step)
+            category_prompt = self.create_category_selection_prompt(sample, num_inputs, num_categories)
+            category_response = self.query_llm(category_prompt)
+            selected_categories = self.parse_selected_categories(category_response, num_categories)
+            
+            # Evaluate category selection accuracy
+            category_correct = self.evaluate_category_selection(selected_categories, disease_category)
+            
+            if self.show_responses:
+                print(f"Sample: {sample_path}")
+                print(f"Disease Category: {disease_category}")
+                print(f"Category Selection Response: '{category_response}'")
+                print(f"Selected Categories: {selected_categories}")
+                print(f"Category Selection Correct: {category_correct}")
+                print()
+            
+            # Step 2: Iterative reasoning through flowcharts
+            reasoning_result = self.iterative_reasoning_with_flowcharts(
+                sample, num_inputs, selected_categories, max_reasoning_steps
+            )
+            
+            predicted = reasoning_result['final_diagnosis']
+            reasoning_trace = reasoning_result['reasoning_trace']
+            reasoning_steps = reasoning_result['reasoning_steps']
+            reasoning_path_correct = self.evaluate_reasoning_path(reasoning_trace, disease_category)
+            
+            if self.show_responses:
+                print(f"Iterative Reasoning Steps: {reasoning_steps}")
+                print(f"Reasoning Path:")
+                for step in reasoning_trace:
+                    print(f"  Step {step['step']}: {step.get('action', 'step')} - {step.get('response', step.get('chosen_option', 'N/A'))}")
+                print(f"Final Diagnosis: '{predicted}'")
+                print(f"Ground Truth Diagnosis: '{ground_truth}'")
+                print(f"Reasoning Path Correct: {reasoning_path_correct}")
+                print()
+        
+        elif two_step_reasoning:
             # Step 1: Category selection
             category_prompt = self.create_category_selection_prompt(sample, num_inputs, num_categories)
             category_response = self.query_llm(category_prompt)
@@ -268,8 +315,19 @@ Answer:"""
             'evaluation_method': 'llm_judge' if self.use_llm_judge else 'exact_match'
         }
         
-        # Add two-step specific information
-        if two_step_reasoning:
+        # Add mode-specific information
+        if iterative_reasoning:
+            result.update({
+                'iterative_reasoning': True,
+                'category_selection_response': category_response,
+                'selected_categories': selected_categories,
+                'category_selection_correct': category_correct,
+                'reasoning_trace': reasoning_trace,
+                'reasoning_steps': reasoning_steps,
+                'reasoning_path_correct': reasoning_path_correct,
+                'category_prompt': category_prompt
+            })
+        elif two_step_reasoning:
             result.update({
                 'two_step_reasoning': True,
                 'category_selection_response': category_response,
@@ -336,7 +394,9 @@ Answer:"""
                         max_samples: Optional[int] = None,
                         samples_dir: str = None,
                         two_step_reasoning: bool = False,
-                        num_categories: int = 3) -> Dict:
+                        num_categories: int = 3,
+                        iterative_reasoning: bool = False,
+                        max_reasoning_steps: int = 5) -> Dict:
         """
         Evaluate the entire dataset
         
@@ -347,6 +407,8 @@ Answer:"""
             samples_dir: Custom samples directory (optional)
             two_step_reasoning: Whether to use two-step reasoning
             num_categories: Number of categories to select in first step
+            iterative_reasoning: Whether to use iterative step-by-step reasoning
+            max_reasoning_steps: Maximum number of reasoning steps for iterative mode
         
         Returns:
             Dict with evaluation metrics and results
@@ -368,6 +430,9 @@ Answer:"""
         if two_step_reasoning:
             print(f"Two-step reasoning enabled (selecting {num_categories} categories)")
             print(f"Available categories: {len(self.flowchart_categories)}")
+        elif iterative_reasoning:
+            print(f"Iterative reasoning enabled (selecting {num_categories} categories, max {max_reasoning_steps} steps)")
+            print(f"Available categories: {len(self.flowchart_categories)}")
         print(f"LLM Judge enabled: {self.use_llm_judge}")
         if self.show_responses:
             print(f"Showing LLM responses: {self.show_responses}")
@@ -388,7 +453,9 @@ Answer:"""
                 num_inputs, 
                 provide_diagnosis_list,
                 two_step_reasoning=two_step_reasoning,
-                num_categories=num_categories
+                num_categories=num_categories,
+                iterative_reasoning=iterative_reasoning,
+                max_reasoning_steps=max_reasoning_steps
             )
             results.append(result)
         
@@ -413,7 +480,7 @@ Answer:"""
         f1 = f1_score(y_true, y_pred, labels=unique_labels, 
                      average='weighted', zero_division=0)
         
-        # Calculate category selection accuracy for two-step mode
+        # Calculate mode-specific metrics
         overall_metrics = {
             'accuracy': accuracy,
             'precision': precision,
@@ -422,12 +489,27 @@ Answer:"""
             'num_samples': len(results)
         }
         
-        if two_step_reasoning:
+        if two_step_reasoning or iterative_reasoning:
             category_selections = [r.get('category_selection_correct') for r in results 
                                  if r.get('category_selection_correct') is not None]
             if category_selections:
                 category_selection_accuracy = sum(category_selections) / len(category_selections)
                 overall_metrics['category_selection_accuracy'] = category_selection_accuracy
+        
+        if iterative_reasoning:
+            # Calculate reasoning path metrics
+            reasoning_paths = [r.get('reasoning_path_correct') for r in results 
+                             if r.get('reasoning_path_correct') is not None]
+            if reasoning_paths:
+                reasoning_path_accuracy = sum(reasoning_paths) / len(reasoning_paths)
+                overall_metrics['reasoning_path_accuracy'] = reasoning_path_accuracy
+            
+            # Calculate average reasoning steps
+            reasoning_steps = [r.get('reasoning_steps', 0) for r in results 
+                             if r.get('reasoning_steps') is not None]
+            if reasoning_steps:
+                avg_reasoning_steps = sum(reasoning_steps) / len(reasoning_steps)
+                overall_metrics['avg_reasoning_steps'] = avg_reasoning_steps
         
         # Per-class metrics (individual diagnoses)
         per_class_metrics = {}
@@ -458,7 +540,9 @@ Answer:"""
                 'use_llm_judge': self.use_llm_judge,
                 'show_responses': self.show_responses,
                 'two_step_reasoning': two_step_reasoning,
-                'num_categories': num_categories if two_step_reasoning else None
+                'iterative_reasoning': iterative_reasoning,
+                'num_categories': num_categories if (two_step_reasoning or iterative_reasoning) else None,
+                'max_reasoning_steps': max_reasoning_steps if iterative_reasoning else None
             }
         }
     
@@ -589,4 +673,224 @@ Answer:"""
     
     def evaluate_category_selection(self, selected_categories: List[str], ground_truth_category: str) -> bool:
         """Check if the ground truth category is in the selected categories"""
-        return ground_truth_category in selected_categories 
+        return ground_truth_category in selected_categories
+    
+    def create_patient_data_summary(self, sample: Dict, num_inputs: int) -> str:
+        """Create a concise summary of patient data for reasoning steps"""
+        
+        input_descriptions = {
+            1: "Chief Complaint",
+            2: "History of Present Illness", 
+            3: "Past Medical History",
+            4: "Family History",
+            5: "Physical Examination",
+            6: "Laboratory Results and Pertinent Findings"
+        }
+        
+        summary = ""
+        for i in range(1, min(num_inputs + 1, 7)):
+            input_key = f"input{i}"
+            if input_key in sample:
+                # Truncate long text for reasoning steps
+                content = sample[input_key]
+                if len(content) > 200:
+                    content = content[:200] + "..."
+                summary += f"• {input_descriptions[i]}: {content}\n"
+        
+        return summary.strip()
+    
+    def iterative_reasoning_with_flowcharts(self, sample: Dict, num_inputs: int, 
+                                          selected_categories: List[str], 
+                                          max_steps: int = 5) -> Dict:
+        """
+        Perform iterative step-by-step reasoning following flowcharts
+        
+        Args:
+            sample: The clinical sample data
+            num_inputs: Number of input fields to use
+            selected_categories: Categories selected in the first step
+            max_steps: Maximum number of reasoning steps
+        
+        Returns:
+            Dict with reasoning results
+        """
+        
+        patient_summary = self.create_patient_data_summary(sample, num_inputs)
+        reasoning_trace = []
+        final_diagnosis = None
+        
+        # Load flowcharts for selected categories
+        flowcharts = {}
+        for category in selected_categories:
+            try:
+                flowchart_data = load_flowchart_content(category, self.flowchart_dir)
+                flowcharts[category] = {
+                    'structure': get_flowchart_structure(flowchart_data),
+                    'knowledge': get_flowchart_knowledge(flowchart_data)
+                }
+            except Exception as e:
+                print(f"Warning: Could not load flowchart for {category}: {e}")
+        
+        if not flowcharts:
+            return {
+                'final_diagnosis': "",
+                'reasoning_trace': [],
+                'reasoning_steps': 0,
+                'reasoning_successful': False
+            }
+        
+        # Start iterative reasoning
+        current_step = 1
+        
+        # Step 1: Select starting category and root node
+        if len(selected_categories) == 1:
+            current_category = selected_categories[0]
+        else:
+            # Let LLM choose which category to start with
+            category_prompt = self.create_initial_category_selection_prompt(
+                patient_summary, selected_categories, flowcharts
+            )
+            category_response = self.query_llm(category_prompt)
+            current_category = self.parse_category_selection(category_response, selected_categories)
+        
+        if current_category not in flowcharts:
+            current_category = selected_categories[0]  # Fallback
+        
+        # Get root nodes for the selected category
+        root_nodes = find_flowchart_root_nodes(flowcharts[current_category]['structure'])
+        if not root_nodes:
+            return {
+                'final_diagnosis': "",
+                'reasoning_trace': [],
+                'reasoning_steps': 0,
+                'reasoning_successful': False
+            }
+        
+        current_node = root_nodes[0]  # Start with first root node
+        
+        reasoning_trace.append({
+            'step': current_step,
+            'category': current_category,
+            'node': current_node,
+            'action': 'start',
+            'response': f"Starting with {current_category} -> {current_node}"
+        })
+        
+        # Iterative reasoning through the flowchart
+        while current_step < max_steps:
+            current_step += 1
+            
+            # Check if current node is a leaf (final diagnosis)
+            if is_leaf_diagnosis(flowcharts[current_category]['structure'], current_node):
+                final_diagnosis = current_node
+                reasoning_trace.append({
+                    'step': current_step,
+                    'category': current_category,
+                    'node': current_node,
+                    'action': 'final_diagnosis',
+                    'response': f"Reached final diagnosis: {current_node}"
+                })
+                break
+            
+            # Get children nodes
+            children = get_flowchart_children(flowcharts[current_category]['structure'], current_node)
+            
+            if not children:
+                # This is effectively a leaf node
+                final_diagnosis = current_node
+                reasoning_trace.append({
+                    'step': current_step,
+                    'category': current_category,
+                    'node': current_node,
+                    'action': 'final_diagnosis',
+                    'response': f"No further options, final diagnosis: {current_node}"
+                })
+                break
+            
+            # Create reasoning step prompt
+            step_prompt = format_reasoning_step(
+                current_step, 
+                current_node, 
+                children,
+                flowcharts[current_category]['knowledge'],
+                patient_summary
+            )
+            
+            # Get LLM response
+            step_response = self.query_llm(step_prompt)
+            
+            # Parse the choice
+            chosen_node = extract_reasoning_choice(step_response, children)
+            
+            reasoning_trace.append({
+                'step': current_step,
+                'category': current_category,
+                'node': current_node,
+                'available_options': children,
+                'chosen_option': chosen_node,
+                'action': 'reasoning_step',
+                'prompt': step_prompt,
+                'response': step_response
+            })
+            
+            current_node = chosen_node
+        
+        # If we didn't reach a final diagnosis, use the last node
+        if not final_diagnosis:
+            final_diagnosis = current_node
+        
+        return {
+            'final_diagnosis': final_diagnosis,
+            'reasoning_trace': reasoning_trace,
+            'reasoning_steps': len(reasoning_trace),
+            'reasoning_successful': final_diagnosis != "",
+            'category_used': current_category
+        }
+    
+    def create_initial_category_selection_prompt(self, patient_summary: str, 
+                                               categories: List[str], 
+                                               flowcharts: Dict) -> str:
+        """Create prompt for selecting which category to start reasoning with"""
+        
+        prompt = "You are a medical expert beginning diagnostic reasoning. "
+        prompt += "Based on the patient information, select which disease category to explore first.\n\n"
+        
+        prompt += f"Patient Information:\n{patient_summary}\n\n"
+        
+        prompt += "Available categories to explore:\n"
+        for i, category in enumerate(categories, 1):
+            prompt += f"{i}. {category}\n"
+        
+        prompt += f"\nSelect the most promising category to start your diagnostic reasoning. "
+        prompt += f"Respond with ONLY the number (1-{len(categories)}) of your choice.\n"
+        
+        return prompt
+    
+    def parse_category_selection(self, response: str, categories: List[str]) -> str:
+        """Parse category selection response"""
+        
+        import re
+        number_match = re.search(r'\b(\d+)\b', response.strip())
+        if number_match:
+            try:
+                choice_num = int(number_match.group(1))
+                if 1 <= choice_num <= len(categories):
+                    return categories[choice_num - 1]
+            except ValueError:
+                pass
+        
+        # Fallback to first category
+        return categories[0] if categories else ""
+    
+    def evaluate_reasoning_path(self, reasoning_trace: List[Dict], ground_truth_category: str) -> bool:
+        """Evaluate if the reasoning path used the correct disease category"""
+        
+        if not reasoning_trace:
+            return False
+        
+        # Check if any step used the correct category
+        for step in reasoning_trace:
+            if step.get('category') == ground_truth_category:
+                return True
+        
+        return False 
