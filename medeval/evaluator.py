@@ -382,6 +382,15 @@ Answer:"""
             
             if self.show_responses:
                 print(f"Iterative Reasoning Steps: {reasoning_steps}")
+                
+                # Show initial category selection reasoning if multiple categories were provided
+                if len(selected_categories) > 1:
+                    print(f"Initial Category Selection Reasoning:")
+                    print(f"  Available categories: {selected_categories}")
+                    print(f"  Selection response: {reasoning_result.get('initial_category_selection_response', '')[:200]}...")
+                    print(f"  Chosen category: {reasoning_result.get('category_used')}")
+                    print()
+                
                 print(f"Reasoning Path:")
                 for step in reasoning_trace:
                     if step.get('action') == 'start':
@@ -481,7 +490,9 @@ Answer:"""
                 'reasoning_trace': reasoning_trace,
                 'reasoning_steps': reasoning_steps,
                 'reasoning_path_correct': reasoning_path_correct,
-                'category_prompt': category_prompt
+                'category_prompt': category_prompt,
+                'initial_category_selection_response': reasoning_result.get('initial_category_selection_response', ''),
+                'chosen_category': reasoning_result.get('category_used', '')
             })
         elif two_step_reasoning:
             result.update({
@@ -957,19 +968,18 @@ Answer:"""
                 'reasoning_successful': False
             }
         
-        # Start iterative reasoning
-        current_step = 1
-        
         # Step 1: Select starting category and root node
+        initial_category_response = ""
         if len(selected_categories) == 1:
             current_category = selected_categories[0]
+            initial_category_response = f"Single category selected: {current_category}"
         else:
-            # Let LLM choose which category to start with
+            # Let LLM choose which category to start with using enhanced evidence-based reasoning
             category_prompt = self.create_initial_category_selection_prompt(
                 patient_summary, selected_categories, flowcharts
             )
-            category_response = self.query_llm(category_prompt, max_tokens=800)
-            current_category = self.parse_category_selection(category_response, selected_categories)
+            initial_category_response = self.query_llm(category_prompt, max_tokens=800)
+            current_category = self.parse_category_selection(initial_category_response, selected_categories)
         
         if current_category not in flowcharts:
             current_category = selected_categories[0]  # Fallback
@@ -987,7 +997,7 @@ Answer:"""
         current_node = root_nodes[0]  # Start with first root node
         
         reasoning_trace.append({
-            'step': current_step,
+            'step': 1,
             'category': current_category,
             'current_node': current_node,
             'action': 'start',
@@ -995,14 +1005,13 @@ Answer:"""
         })
         
         # Iterative reasoning through the flowchart
-        while current_step < max_steps:
-            current_step += 1
+        for step in range(2, max_steps + 1):
             
             # Check if current node is a leaf (final diagnosis)
             if is_leaf_diagnosis(flowcharts[current_category]['structure'], current_node):
                 final_diagnosis = current_node
                 reasoning_trace.append({
-                    'step': current_step,
+                    'step': step,
                     'category': current_category,
                     'current_node': current_node,
                     'action': 'final_diagnosis',
@@ -1017,7 +1026,7 @@ Answer:"""
                 # This is effectively a leaf node
                 final_diagnosis = current_node
                 reasoning_trace.append({
-                    'step': current_step,
+                    'step': step,
                     'category': current_category,
                     'current_node': current_node,
                     'action': 'final_diagnosis',
@@ -1027,7 +1036,7 @@ Answer:"""
             
             # Create reasoning step prompt
             step_prompt = format_reasoning_step(
-                current_step, 
+                step, 
                 current_node, 
                 children,
                 flowcharts[current_category]['knowledge'],
@@ -1043,7 +1052,7 @@ Answer:"""
             chosen_node = reasoning_result['chosen_option']
             
             reasoning_trace.append({
-                'step': current_step,
+                'step': step,
                 'category': current_category,
                 'current_node': current_node,
                 'available_options': children,
@@ -1068,32 +1077,84 @@ Answer:"""
             'reasoning_trace': reasoning_trace,
             'reasoning_steps': len(reasoning_trace),
             'reasoning_successful': final_diagnosis != "",
-            'category_used': current_category
+            'category_used': current_category,
+            'initial_category_selection_response': initial_category_response,
+            'selected_categories': selected_categories
         }
     
     def create_initial_category_selection_prompt(self, patient_summary: str, 
                                                categories: List[str], 
                                                flowcharts: Dict) -> str:
-        """Create prompt for selecting which category to start reasoning with"""
+        """Create prompt for selecting which category to start reasoning with (with detailed evidence-based reasoning)"""
         
-        prompt = "You are a medical expert beginning diagnostic reasoning. "
-        prompt += "Based on the patient information, select which disease category to explore first.\n\n"
+        prompt = "You are a medical expert beginning iterative diagnostic reasoning. You have already identified the most likely disease categories, and now you must decide which category to explore FIRST in your step-by-step diagnostic process.\n\n"
         
-        prompt += f"Patient Information:\n{patient_summary}\n\n"
+        # Add patient data
+        prompt += f"**Patient Clinical Information:**\n{patient_summary}\n\n"
         
-        prompt += "Available categories to explore:\n"
+        # Add the selected categories with brief descriptions if available
+        prompt += f"**Previously Selected Disease Categories to Explore:**\n"
         for i, category in enumerate(categories, 1):
-            prompt += f"{i}. {category}\n"
+            prompt += f"{i}. **{category}**\n"
+            # Add brief flowchart info if available
+            if category in flowcharts and 'knowledge' in flowcharts[category]:
+                # Add a brief overview of this category's typical presentations
+                knowledge = flowcharts[category]['knowledge']
+                if isinstance(knowledge, dict) and knowledge:
+                    prompt += f"   Typical presentations: Focus on conditions related to {category.lower()}\n"
+            prompt += "\n"
         
-        prompt += f"\nSelect the most promising category to start your diagnostic reasoning. "
-        prompt += f"Respond with ONLY the number (1-{len(categories)}) of your choice.\n"
+        # Instructions for evidence-based reasoning
+        prompt += f"**CRITICAL INSTRUCTIONS:**\n"
+        prompt += f"• Use ONLY the patient information provided above\n"
+        prompt += f"• Match SPECIFIC patient observations to each category's typical presentations\n"
+        prompt += f"• Choose the category with the STRONGEST evidence for immediate exploration\n"
+        prompt += f"• Provide detailed reasoning for your choice and deferral of others\n\n"
+        
+        if len(categories) > 1:
+            prompt += f"**Required Analysis Format:**\n\n"
+            prompt += f"**EVIDENCE ANALYSIS:**\n"
+            prompt += f"For each category, analyze:\n"
+            prompt += f"• Which specific patient findings support starting with this category\n"
+            prompt += f"• Which specific patient findings suggest this category should be deferred\n"
+            prompt += f"• The urgency/priority of exploring this category first\n\n"
+            
+            prompt += f"**COMPARATIVE REASONING:**\n"
+            prompt += f"Compare the categories for initial exploration:\n"
+            prompt += f"• Which category has the most compelling evidence to start with?\n"
+            prompt += f"• Why should the other {len(categories)-1} categories be explored later?\n"
+            prompt += f"• What specific evidence makes your chosen category the highest priority?\n\n"
+            
+            prompt += f"**DECISION:** [Number] - [Category Name]\n"
+            prompt += f"**RATIONALE:** [Detailed evidence-based explanation for starting with this category and deferring the other {len(categories)-1} categories]\n"
+        else:
+            # Single category case
+            prompt += f"**Evidence Analysis:**\n"
+            prompt += f"Analyze why this category is the appropriate starting point:\n"
+            prompt += f"• Which specific patient findings support exploring this category\n"
+            prompt += f"• Why is this category the logical place to begin diagnostic reasoning\n\n"
+            
+            prompt += f"**DECISION:** 1 - {categories[0]}\n"
+            prompt += f"**RATIONALE:** [Evidence-based explanation for why this category is the appropriate starting point]\n"
         
         return prompt
     
     def parse_category_selection(self, response: str, categories: List[str]) -> str:
-        """Parse category selection response"""
+        """Parse enhanced category selection response with evidence-based reasoning"""
         
         import re
+        
+        # First try to extract from DECISION section
+        decision_match = re.search(r'DECISION:\s*(\d+)\s*-\s*([^.\n]+)', response, re.IGNORECASE)
+        if decision_match:
+            try:
+                choice_num = int(decision_match.group(1))
+                if 1 <= choice_num <= len(categories):
+                    return categories[choice_num - 1]
+            except ValueError:
+                pass
+        
+        # Fallback: look for any number in the response
         number_match = re.search(r'\b(\d+)\b', response.strip())
         if number_match:
             try:
@@ -1103,7 +1164,13 @@ Answer:"""
             except ValueError:
                 pass
         
-        # Fallback to first category
+        # Fallback: try to match category names directly
+        response_lower = response.lower()
+        for category in categories:
+            if category.lower() in response_lower:
+                return category
+        
+        # Final fallback to first category
         return categories[0] if categories else ""
     
     def evaluate_reasoning_path(self, reasoning_trace: List[Dict], ground_truth_category: str) -> bool:
@@ -1150,22 +1217,18 @@ Answer:"""
                 'reasoning_successful': False
             }
         
-        # Start iterative reasoning
-        current_step = 1
-        
-        # Step 1: Select starting category (may need async call)
+        # Step 1: Select starting category and root node
+        initial_category_response = ""
         if len(selected_categories) == 1:
             current_category = selected_categories[0]
+            initial_category_response = f"Single category selected: {current_category}"
         else:
-            # Async category selection
+            # Let LLM choose which category to start with using enhanced evidence-based reasoning
             category_prompt = self.create_initial_category_selection_prompt(
                 patient_summary, selected_categories, flowcharts
             )
-            result = await self.query_llm_async(category_prompt, f"category_selection", max_tokens=200)
-            if result['success']:
-                current_category = self.parse_category_selection(result['response'], selected_categories)
-            else:
-                current_category = selected_categories[0]  # Fallback
+            initial_category_response = self.query_llm(category_prompt, max_tokens=800)
+            current_category = self.parse_category_selection(initial_category_response, selected_categories)
         
         if current_category not in flowcharts:
             current_category = selected_categories[0]  # Fallback
@@ -1183,7 +1246,7 @@ Answer:"""
         current_node = root_nodes[0]  # Start with first root node
         
         reasoning_trace.append({
-            'step': current_step,
+            'step': 1,
             'category': current_category,
             'current_node': current_node,
             'action': 'start',
@@ -1191,14 +1254,13 @@ Answer:"""
         })
         
         # Iterative reasoning through the flowchart
-        while current_step < max_steps:
-            current_step += 1
+        for step in range(2, max_steps + 1):
             
             # Check if current node is a leaf (final diagnosis)
             if is_leaf_diagnosis(flowcharts[current_category]['structure'], current_node):
                 final_diagnosis = current_node
                 reasoning_trace.append({
-                    'step': current_step,
+                    'step': step,
                     'category': current_category,
                     'current_node': current_node,
                     'action': 'final_diagnosis',
@@ -1213,7 +1275,7 @@ Answer:"""
                 # This is effectively a leaf node
                 final_diagnosis = current_node
                 reasoning_trace.append({
-                    'step': current_step,
+                    'step': step,
                     'category': current_category,
                     'current_node': current_node,
                     'action': 'final_diagnosis',
@@ -1223,44 +1285,37 @@ Answer:"""
             
             # Create reasoning step prompt
             step_prompt = format_reasoning_step(
-                current_step, 
+                step, 
                 current_node, 
                 children,
                 flowcharts[current_category]['knowledge'],
                 patient_summary
             )
             
-            # Async API call for reasoning step
+            # Get LLM response
             # Iterative reasoning steps need large token limit for evidence matching and comparative analysis
-            result = await self.query_llm_async(step_prompt, f"reasoning_step_{current_step}", max_tokens=1200)
+            step_response = self.query_llm(step_prompt, max_tokens=1200)
             
-            if result['success']:
-                step_response = result['response']
-                
-                # Parse the choice and reasoning
-                reasoning_result = extract_reasoning_choice(step_response, children)
-                chosen_node = reasoning_result['chosen_option']
-                
-                reasoning_trace.append({
-                    'step': current_step,
-                    'category': current_category,
-                    'current_node': current_node,
-                    'available_options': children,
-                    'chosen_option': chosen_node,
-                    'action': 'reasoning_step',
-                    'prompt': step_prompt,
-                    'response': step_response,
-                    'evidence_matching': reasoning_result.get('evidence_matching', ''),
-                    'comparative_analysis': reasoning_result.get('comparative_analysis', ''),
-                    'rationale': reasoning_result.get('rationale', ''),
-                    'decision_text': reasoning_result.get('decision_text', '')
-                })
-                
-                current_node = chosen_node
-            else:
-                # API call failed, break the reasoning
-                print(f"API call failed at step {current_step}: {result['error']}")
-                break
+            # Parse the choice and reasoning
+            reasoning_result = extract_reasoning_choice(step_response, children)
+            chosen_node = reasoning_result['chosen_option']
+            
+            reasoning_trace.append({
+                'step': step,
+                'category': current_category,
+                'current_node': current_node,
+                'available_options': children,
+                'chosen_option': chosen_node,
+                'action': 'reasoning_step',
+                'prompt': step_prompt,
+                'response': step_response,
+                'evidence_matching': reasoning_result.get('evidence_matching', ''),
+                'comparative_analysis': reasoning_result.get('comparative_analysis', ''),
+                'rationale': reasoning_result.get('rationale', ''),
+                'decision_text': reasoning_result.get('decision_text', '')
+            })
+            
+            current_node = chosen_node
         
         # If we didn't reach a final diagnosis, use the last node
         if not final_diagnosis:
@@ -1271,7 +1326,9 @@ Answer:"""
             'reasoning_trace': reasoning_trace,
             'reasoning_steps': len(reasoning_trace),
             'reasoning_successful': final_diagnosis != "",
-            'category_used': current_category
+            'category_used': current_category,
+            'initial_category_selection_response': initial_category_response,
+            'selected_categories': selected_categories
         }
     
     async def evaluate_sample_async(self, sample_path: str, num_inputs: int, 
@@ -1405,7 +1462,9 @@ Answer:"""
                 'reasoning_trace': reasoning_trace,
                 'reasoning_steps': reasoning_steps,
                 'reasoning_path_correct': reasoning_path_correct,
-                'category_prompt': category_prompt if 'category_prompt' in locals() else ""
+                'category_prompt': category_prompt,
+                'initial_category_selection_response': reasoning_result.get('initial_category_selection_response', ''),
+                'chosen_category': reasoning_result.get('category_used', '')
             })
         elif two_step_reasoning:
             result.update({
@@ -1413,11 +1472,11 @@ Answer:"""
                 'category_selection_response': category_response,
                 'selected_categories': selected_categories,
                 'category_selection_correct': category_correct,
-                'category_prompt': category_prompt if 'category_prompt' in locals() else "",
-                'final_prompt': final_prompt if 'final_prompt' in locals() else ""
+                'category_prompt': category_prompt,
+                'final_prompt': final_prompt
             })
         else:
-            result['prompt'] = prompt if 'prompt' in locals() else ""
+            result['prompt'] = prompt
         
         return result 
 
