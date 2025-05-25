@@ -313,10 +313,12 @@ Answer:"""
                         print(f"  Step {step['step']}: Starting with {step.get('category')} -> {step.get('current_node')}")
                     elif step.get('action') == 'reasoning_step':
                         print(f"  Step {step['step']}: {step.get('current_node')} -> {step.get('chosen_option')}")
-                        if step.get('parsed_analysis'):
-                            print(f"    Analysis: {step['parsed_analysis'][:100]}...")
-                        if step.get('parsed_rationale'):
-                            print(f"    Rationale: {step['parsed_rationale'][:100]}...")
+                        if step.get('evidence_matching'):
+                            print(f"    Evidence Matching: {step['evidence_matching'][:120]}...")
+                        if step.get('comparative_analysis'):
+                            print(f"    Comparative Analysis: {step['comparative_analysis'][:120]}...")
+                        if step.get('rationale'):
+                            print(f"    Rationale: {step['rationale'][:120]}...")
                     elif step.get('action') == 'final_diagnosis':
                         print(f"  Step {step['step']}: Final diagnosis - {step.get('current_node')}")
                 print(f"Final Diagnosis: '{predicted}'")
@@ -651,18 +653,47 @@ Answer:"""
         prompt = "You are a medical expert tasked with narrowing down the most likely disease categories based on clinical information.\n\n"
         
         # Add clinical data
+        prompt += "**Patient Clinical Information:**\n"
         for i in range(1, min(num_inputs + 1, 7)):
             input_key = f"input{i}"
             if input_key in sample:
-                prompt += f"**{input_descriptions[i]}:**\n{sample[input_key]}\n\n"
+                prompt += f"• {input_descriptions[i]}: {sample[input_key]}\n"
+        prompt += "\n"
         
         prompt += "**Available Disease Categories:**\n"
         for i, category in enumerate(self.flowchart_categories, 1):
             prompt += f"{i}. {category}\n"
         
-        prompt += f"\nBased on the clinical information above, select the {num_categories} most likely disease categories. "
-        prompt += f"Respond with ONLY the {num_categories} category names, one per line, in order of likelihood (most likely first).\n\n"
-        prompt += "Selected Categories:"
+        if num_categories > 1:
+            prompt += f"\nBased on the patient clinical information above, you must select the {num_categories} most likely disease categories.\n\n"
+            prompt += f"**IMPORTANT INSTRUCTIONS:**\n"
+            prompt += f"• Use ONLY the specific clinical findings, symptoms, and data provided above\n"
+            prompt += f"• Do NOT rely on general medical knowledge\n"
+            prompt += f"• Match specific patient observations to each category's typical presentations\n"
+            prompt += f"• Provide detailed reasoning for your choices and rejections\n\n"
+            
+            prompt += f"Please provide your analysis in this format:\n\n"
+            prompt += f"**DETAILED ANALYSIS:**\n"
+            prompt += f"For each category you are considering, analyze:\n"
+            prompt += f"• Which specific patient findings support this category\n"
+            prompt += f"• Which specific patient findings argue against this category\n"
+            prompt += f"• Your reasoning based on the available clinical data\n\n"
+            
+            prompt += f"**SELECTED CATEGORIES:**\n"
+            prompt += f"List your {num_categories} chosen categories in order of likelihood:\n"
+            prompt += f"1. [Category Name] - [Brief justification based on patient data]\n"
+            prompt += f"2. [Category Name] - [Brief justification based on patient data]\n"
+            if num_categories > 2:
+                prompt += f"3. [Category Name] - [Brief justification based on patient data]\n"
+            if num_categories > 3:
+                for i in range(4, num_categories + 1):
+                    prompt += f"{i}. [Category Name] - [Brief justification based on patient data]\n"
+            
+            prompt += f"\n**REJECTED CATEGORIES:**\n"
+            prompt += f"Explain why you rejected the most obvious alternative categories based on the patient data.\n"
+        else:
+            prompt += f"\nBased on the patient clinical information above, select the 1 most likely disease category.\n"
+            prompt += f"Respond with ONLY the category name that best matches the patient's presentation.\n"
         
         return prompt
     
@@ -720,25 +751,59 @@ Answer:"""
     def parse_selected_categories(self, response: str, num_categories: int) -> List[str]:
         """Parse the LLM response to extract selected categories"""
         
-        lines = [line.strip() for line in response.split('\n') if line.strip()]
         selected = []
         
-        for line in lines[:num_categories]:  # Take only the requested number
-            # Clean up the line - remove numbers, bullets, etc.
-            clean_line = re.sub(r'^\d+\.?\s*', '', line)  # Remove leading numbers
-            clean_line = re.sub(r'^[•\-\*]\s*', '', clean_line)  # Remove bullets
-            clean_line = clean_line.strip()
-            
-            # Find best match in flowchart categories
-            for category in self.flowchart_categories:
-                if clean_line.lower() == category.lower():
-                    selected.append(category)
-                    break
-                elif clean_line.lower() in category.lower() or category.lower() in clean_line.lower():
-                    selected.append(category)
-                    break
+        # Try to extract from SELECTED CATEGORIES section first
+        import re
         
-        # If we couldn't parse enough categories, fill with most common ones
+        # Look for the SELECTED CATEGORIES section
+        selected_section_match = re.search(r'SELECTED CATEGORIES:\s*(.*?)(?=REJECTED CATEGORIES:|$)', 
+                                         response, re.DOTALL | re.IGNORECASE)
+        
+        if selected_section_match:
+            selected_text = selected_section_match.group(1)
+            
+            # Extract numbered categories
+            lines = [line.strip() for line in selected_text.split('\n') if line.strip()]
+            
+            for line in lines[:num_categories]:
+                # Extract category name from lines like "1. Category Name - justification"
+                category_match = re.search(r'^\d+\.\s*([^-]+)', line)
+                if category_match:
+                    category_name = category_match.group(1).strip()
+                    
+                    # Find best match in flowchart categories
+                    for category in self.flowchart_categories:
+                        if category_name.lower() == category.lower():
+                            selected.append(category)
+                            break
+                        elif category_name.lower() in category.lower() or category.lower() in category_name.lower():
+                            selected.append(category)
+                            break
+        
+        # Fallback to original parsing if structured parsing failed
+        if len(selected) < num_categories:
+            lines = [line.strip() for line in response.split('\n') if line.strip()]
+            
+            for line in lines[:num_categories]:
+                # Clean up the line - remove numbers, bullets, etc.
+                clean_line = re.sub(r'^\d+\.?\s*', '', line)  # Remove leading numbers
+                clean_line = re.sub(r'^[•\-\*]\s*', '', clean_line)  # Remove bullets
+                clean_line = clean_line.split('-')[0].strip()  # Remove everything after dash
+                clean_line = clean_line.strip()
+                
+                # Find best match in flowchart categories
+                for category in self.flowchart_categories:
+                    if clean_line.lower() == category.lower():
+                        if category not in selected:
+                            selected.append(category)
+                        break
+                    elif clean_line.lower() in category.lower() or category.lower() in clean_line.lower():
+                        if category not in selected:
+                            selected.append(category)
+                        break
+        
+        # If we still couldn't parse enough categories, fill with most common ones
         while len(selected) < num_categories and len(selected) < len(self.flowchart_categories):
             for category in self.flowchart_categories:
                 if category not in selected:
@@ -908,8 +973,9 @@ Answer:"""
                 'action': 'reasoning_step',
                 'prompt': step_prompt,
                 'response': step_response,
-                'parsed_analysis': reasoning_result.get('analysis', ''),
-                'parsed_rationale': reasoning_result.get('rationale', ''),
+                'evidence_matching': reasoning_result.get('evidence_matching', ''),
+                'comparative_analysis': reasoning_result.get('comparative_analysis', ''),
+                'rationale': reasoning_result.get('rationale', ''),
                 'decision_text': reasoning_result.get('decision_text', '')
             })
             
@@ -1105,8 +1171,9 @@ Answer:"""
                     'action': 'reasoning_step',
                     'prompt': step_prompt,
                     'response': step_response,
-                    'parsed_analysis': reasoning_result.get('analysis', ''),
-                    'parsed_rationale': reasoning_result.get('rationale', ''),
+                    'evidence_matching': reasoning_result.get('evidence_matching', ''),
+                    'comparative_analysis': reasoning_result.get('comparative_analysis', ''),
+                    'rationale': reasoning_result.get('rationale', ''),
                     'decision_text': reasoning_result.get('decision_text', '')
                 })
                 

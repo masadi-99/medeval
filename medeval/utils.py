@@ -340,57 +340,72 @@ def format_reasoning_step(step_num: int, current_node: str, available_options: L
     prompt = f"**Reasoning Step {step_num}:**\n\n"
     prompt += f"Current diagnostic consideration: **{current_node}**\n\n"
     
+    # Add patient data summary first
+    prompt += f"**Patient Clinical Information:**\n{patient_data_summary}\n\n"
+    
     # Add knowledge about current node
     if current_node in knowledge:
         knowledge_text = knowledge[current_node]
         if isinstance(knowledge_text, dict):
-            prompt += f"Clinical Information for {current_node}:\n"
+            prompt += f"**Clinical Criteria for {current_node}:**\n"
             for key, value in knowledge_text.items():
-                prompt += f"- {key}: {value}\n"
+                prompt += f"• {key}: {value}\n"
         else:
-            prompt += f"Clinical Information: {knowledge_text}\n"
+            prompt += f"**Clinical Criteria for {current_node}:** {knowledge_text}\n"
         prompt += "\n"
     
-    # Add patient data summary
-    prompt += f"Patient Information:\n{patient_data_summary}\n\n"
-    
-    # Add available options
+    # Add available options with their clinical criteria
     if available_options:
-        prompt += "Available next diagnostic considerations:\n"
+        prompt += "**Available Next Diagnostic Considerations:**\n"
         for i, option in enumerate(available_options, 1):
-            prompt += f"{i}. {option}\n"
+            prompt += f"\n{i}. **{option}**\n"
             # Add knowledge for each option if available
             if option in knowledge:
                 option_knowledge = knowledge[option]
                 if isinstance(option_knowledge, dict):
-                    prompt += f"   Clinical criteria: "
-                    criteria_parts = []
+                    prompt += f"   Clinical criteria:\n"
                     for key, value in option_knowledge.items():
-                        criteria_parts.append(f"{key}: {value}")
-                    prompt += "; ".join(criteria_parts[:2])  # Limit to avoid too long prompts
-                    if len(option_knowledge) > 2:
-                        prompt += "..."
+                        # Truncate very long criteria
+                        truncated_value = value[:200] + "..." if len(value) > 200 else value
+                        prompt += f"   • {key}: {truncated_value}\n"
                 elif isinstance(option_knowledge, str):
                     # Truncate long knowledge text
-                    truncated = option_knowledge[:150] + "..." if len(option_knowledge) > 150 else option_knowledge
-                    prompt += f"   Clinical criteria: {truncated}"
-                prompt += "\n"
+                    truncated = option_knowledge[:250] + "..." if len(option_knowledge) > 250 else option_knowledge
+                    prompt += f"   Clinical criteria: {truncated}\n"
+            else:
+                prompt += f"   (No specific clinical criteria available)\n"
         
-        prompt += f"\nBased on the patient information above, analyze how the patient's clinical presentation matches each diagnostic consideration.\n\n"
-        prompt += f"Please provide your reasoning in this format:\n"
-        prompt += f"ANALYSIS:\n"
-        prompt += f"- Compare patient symptoms/findings to each option's clinical criteria\n"
-        prompt += f"- Identify which patient findings support or rule out each option\n"
-        prompt += f"- Explain your clinical reasoning\n\n"
-        prompt += f"DECISION: [Number of chosen option] - [Option name]\n"
-        prompt += f"RATIONALE: [Brief explanation of why this option best fits the patient]\n"
+        prompt += f"\n**CRITICAL INSTRUCTIONS:**\n"
+        prompt += f"• Use ONLY the patient information and clinical criteria provided above\n"
+        prompt += f"• Do NOT use general medical knowledge or assumptions\n"
+        prompt += f"• Match SPECIFIC patient observations to SPECIFIC clinical criteria\n"
+        prompt += f"• When choosing between options, explain why you selected one and rejected others\n"
+        prompt += f"• Base your reasoning entirely on the available evidence\n\n"
+        
+        prompt += f"**Required Analysis Format:**\n\n"
+        prompt += f"**EVIDENCE MATCHING:**\n"
+        prompt += f"For each diagnostic option, identify:\n"
+        prompt += f"• Which specific patient findings match the clinical criteria\n"
+        prompt += f"• Which specific patient findings contradict the clinical criteria\n"
+        prompt += f"• Missing information that would be expected for this diagnosis\n\n"
+        
+        prompt += f"**COMPARATIVE ANALYSIS:**\n"
+        prompt += f"Compare the options based on evidence matching:\n"
+        prompt += f"• Which option has the strongest evidence support?\n"
+        prompt += f"• Which options can be ruled out and why?\n"
+        prompt += f"• What specific evidence distinguishes your choice from alternatives?\n\n"
+        
+        prompt += f"**DECISION:** [Number of chosen option] - [Option name]\n"
+        prompt += f"**RATIONALE:** [Specific evidence-based explanation for your choice and rejection of alternatives]\n"
     else:
         prompt += "This appears to be a final diagnosis. Based on the patient information and the diagnostic path taken, "
         prompt += "please confirm if this is the most appropriate primary discharge diagnosis.\n\n"
-        prompt += f"Please provide your reasoning:\n"
-        prompt += f"ANALYSIS: How does the patient's presentation support this diagnosis?\n"
-        prompt += f"DECISION: CONFIRMED or RECONSIDER\n"
-        prompt += f"RATIONALE: Explanation for your decision\n"
+        
+        prompt += f"**FINAL DIAGNOSIS VALIDATION:**\n"
+        prompt += f"**EVIDENCE REVIEW:** Review all patient findings that support this final diagnosis\n"
+        prompt += f"**CONFIRMATION:** Does the available evidence strongly support this diagnosis?\n"
+        prompt += f"**DECISION:** CONFIRMED or RECONSIDER\n"
+        prompt += f"**RATIONALE:** Evidence-based explanation for your final decision\n"
     
     return prompt
 
@@ -403,7 +418,8 @@ def extract_reasoning_choice(response: str, available_options: List[str]) -> Dic
     # Try to extract structured response
     result = {
         'chosen_option': "",
-        'analysis': "",
+        'evidence_matching': "",
+        'comparative_analysis': "",
         'rationale': "",
         'decision_text': ""
     }
@@ -411,20 +427,35 @@ def extract_reasoning_choice(response: str, available_options: List[str]) -> Dic
     # Extract sections
     import re
     
-    # Extract ANALYSIS section
-    analysis_match = re.search(r'ANALYSIS:\s*(.*?)(?=DECISION:|$)', response_text, re.DOTALL | re.IGNORECASE)
-    if analysis_match:
-        result['analysis'] = analysis_match.group(1).strip()
+    # Extract EVIDENCE MATCHING section
+    evidence_match = re.search(r'EVIDENCE MATCHING:\s*(.*?)(?=COMPARATIVE ANALYSIS:|DECISION:|$)', 
+                              response_text, re.DOTALL | re.IGNORECASE)
+    if evidence_match:
+        result['evidence_matching'] = evidence_match.group(1).strip()
+    
+    # Extract COMPARATIVE ANALYSIS section
+    comparative_match = re.search(r'COMPARATIVE ANALYSIS:\s*(.*?)(?=DECISION:|$)', 
+                                 response_text, re.DOTALL | re.IGNORECASE)
+    if comparative_match:
+        result['comparative_analysis'] = comparative_match.group(1).strip()
     
     # Extract DECISION section
-    decision_match = re.search(r'DECISION:\s*(.*?)(?=RATIONALE:|$)', response_text, re.DOTALL | re.IGNORECASE)
+    decision_match = re.search(r'DECISION:\s*(.*?)(?=RATIONALE:|$)', 
+                              response_text, re.DOTALL | re.IGNORECASE)
     if decision_match:
         result['decision_text'] = decision_match.group(1).strip()
     
     # Extract RATIONALE section
-    rationale_match = re.search(r'RATIONALE:\s*(.*?)$', response_text, re.DOTALL | re.IGNORECASE)
+    rationale_match = re.search(r'RATIONALE:\s*(.*?)$', 
+                               response_text, re.DOTALL | re.IGNORECASE)
     if rationale_match:
         result['rationale'] = rationale_match.group(1).strip()
+    
+    # For final diagnosis validation, also check for EVIDENCE REVIEW
+    evidence_review_match = re.search(r'EVIDENCE REVIEW:\s*(.*?)(?=CONFIRMATION:|DECISION:|$)', 
+                                     response_text, re.DOTALL | re.IGNORECASE)
+    if evidence_review_match:
+        result['evidence_matching'] = evidence_review_match.group(1).strip()
     
     # Parse the decision to extract the chosen option
     decision_text = result['decision_text']

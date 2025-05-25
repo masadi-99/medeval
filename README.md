@@ -246,24 +246,32 @@ The Iterative Step-by-Step Reasoning feature implements the most sophisticated d
 
 ### How it Works:
 
-**Step 1: Category Selection**
-- LLM receives clinical data and selects k most likely disease categories (same as two-step)
+**Step 1: Enhanced Category Selection**
+- When selecting multiple categories (k > 1), LLM must provide detailed reasoning for each choice and rejection
+- Must match specific patient findings to typical presentations of each category
+- Required to explain why certain categories are supported/rejected by the available evidence
+- Encourages reconsideration of initial diagnostic impressions based on systematic analysis
 
-**Step 2: Iterative Flowchart Traversal**
+**Step 2: Evidence-Based Flowchart Traversal**
 - LLM starts at the root of the selected flowchart(s)
-- At each node, LLM analyzes patient data against clinical criteria for each possible next step
-- LLM provides structured reasoning: ANALYSIS (comparing patient findings to diagnostic criteria), DECISION (chosen path), and RATIONALE (clinical justification)
-- Makes step-by-step decisions to move through the diagnostic tree based on clinical evidence
+- At each node, LLM receives both patient data and specific clinical criteria for each diagnostic option
+- Must match specific patient observations to specific clinical criteria (no general medical knowledge)
+- Provides structured reasoning: EVIDENCE MATCHING (comparing patient findings to diagnostic criteria), COMPARATIVE ANALYSIS (why one option over others), DECISION (chosen path), and RATIONALE (evidence-based justification)
+- When multiple options exist, must explain choice and rejection of alternatives based solely on available evidence
 - Continues until reaching a leaf node (final diagnosis)
-- Each step captures detailed clinical reasoning and justification
+- Each step captures detailed clinical reasoning tied to specific patient findings
 
 ### Benefits:
-- **Explicit Reasoning**: Every diagnostic step is recorded and interpretable
+- **Enhanced Category Selection**: Forces systematic consideration of each category with evidence-based justification
+- **Evidence-Only Reasoning**: Prevents reliance on general medical knowledge, focusing on available patient data
+- **Explicit Reasoning**: Every diagnostic step is recorded and interpretable with specific evidence matching
 - **Clinical Evidence Matching**: LLM must justify each step by connecting patient findings to diagnostic criteria
-- **Structured Decision Making**: Follows established clinical decision trees with detailed reasoning
-- **Path Validation**: Can evaluate if the reasoning path used correct disease categories
-- **Educational Value**: Shows how diagnostic criteria are applied step-by-step with clinical justification
-- **Error Analysis**: Identifies where in the reasoning process errors occur and why
+- **Comparative Decision Making**: When multiple options exist, must explain choice rationale and rejection reasoning
+- **Structured Decision Making**: Follows established clinical decision trees with detailed evidence-based reasoning
+- **Path Validation**: Can evaluate if the reasoning path used correct disease categories and evidence
+- **Educational Value**: Shows how diagnostic criteria are applied step-by-step with specific patient evidence
+- **Error Analysis**: Identifies where in the reasoning process errors occur and why, with evidence trail
+- **Rigorous Methodology**: Ensures reasoning is grounded in available data rather than general medical assumptions
 
 ### Usage:
 ```bash

@@ -74,10 +74,12 @@ def test_iterative_reasoning():
                         print(f"     Step {step['step']}: Starting with {step.get('category')} -> {step.get('current_node')}")
                     elif step.get('action') == 'reasoning_step':
                         print(f"     Step {step['step']}: {step.get('current_node')} -> {step.get('chosen_option')}")
-                        if step.get('parsed_analysis'):
-                            print(f"       Analysis: {step['parsed_analysis'][:100]}...")
-                        if step.get('parsed_rationale'):
-                            print(f"       Rationale: {step['parsed_rationale'][:100]}...")
+                        if step.get('evidence_matching'):
+                            print(f"       Evidence Matching: {step['evidence_matching'][:100]}...")
+                        if step.get('comparative_analysis'):
+                            print(f"       Comparative Analysis: {step['comparative_analysis'][:100]}...")
+                        if step.get('rationale'):
+                            print(f"       Rationale: {step['rationale'][:100]}...")
                     elif step.get('action') == 'final_diagnosis':
                         print(f"     Step {step['step']}: Final diagnosis -> {step.get('current_node')}")
         

@@ -347,8 +347,10 @@ def run_demo(api_key: str, samples_dir: str = None, flowchart_dir: str = None, s
                     print(f"     Step {step['step']}: Starting -> {step.get('current_node')}")
                 elif step.get('action') == 'reasoning_step':
                     print(f"     Step {step['step']}: {step.get('current_node')} -> {step.get('chosen_option')}")
-                    if step.get('parsed_rationale'):
-                        print(f"       Rationale: {step['parsed_rationale'][:80]}...")
+                    if step.get('rationale'):
+                        print(f"       Rationale: {step['rationale'][:80]}...")
+                    if step.get('evidence_matching'):
+                        print(f"       Evidence: {step['evidence_matching'][:80]}...")
                 elif step.get('action') == 'final_diagnosis':
                     print(f"     Step {step['step']}: Final -> {step.get('current_node')}")
         print(f"   Final diagnosis: {sample_result['predicted_matched']}")
