@@ -49,6 +49,10 @@ def main():
                        help='Use iterative step-by-step reasoning following flowcharts to final diagnosis')
     parser.add_argument('--max-reasoning-steps', type=int, default=5,
                        help='Maximum number of reasoning steps in iterative mode (default: 5)')
+    parser.add_argument('--concurrent', action='store_true',
+                       help='Use concurrent processing for faster evaluation (recommended for large datasets)')
+    parser.add_argument('--max-concurrent', type=int, default=10,
+                       help='Maximum number of concurrent API calls (default: 10)')
     
     args = parser.parse_args()
     
@@ -83,19 +87,35 @@ def main():
             flowchart_dir=args.flowchart_dir,
             samples_dir=args.samples_dir,
             use_llm_judge=use_llm_judge,
-            show_responses=args.show_responses
+            show_responses=args.show_responses,
+            max_concurrent=args.max_concurrent
         )
         
-        results = evaluator.evaluate_dataset(
-            num_inputs=args.num_inputs,
-            provide_diagnosis_list=provide_list,
-            max_samples=args.max_samples,
-            samples_dir=args.samples_dir,
-            two_step_reasoning=args.two_step,
-            num_categories=args.num_categories,
-            iterative_reasoning=args.iterative,
-            max_reasoning_steps=args.max_reasoning_steps
-        )
+        if args.concurrent:
+            # Use concurrent evaluation
+            import asyncio
+            results = asyncio.run(evaluator.evaluate_dataset_concurrent(
+                num_inputs=args.num_inputs,
+                provide_diagnosis_list=provide_list,
+                max_samples=args.max_samples,
+                samples_dir=args.samples_dir,
+                two_step_reasoning=args.two_step,
+                num_categories=args.num_categories,
+                iterative_reasoning=args.iterative,
+                max_reasoning_steps=args.max_reasoning_steps
+            ))
+        else:
+            # Use synchronous evaluation
+            results = evaluator.evaluate_dataset(
+                num_inputs=args.num_inputs,
+                provide_diagnosis_list=provide_list,
+                max_samples=args.max_samples,
+                samples_dir=args.samples_dir,
+                two_step_reasoning=args.two_step,
+                num_categories=args.num_categories,
+                iterative_reasoning=args.iterative,
+                max_reasoning_steps=args.max_reasoning_steps
+            )
         
         # Print summary
         print("\n" + "="*50)
@@ -110,8 +130,13 @@ def main():
         print(f"Iterative reasoning: {results['configuration'].get('iterative_reasoning', False)}")
         if results['configuration'].get('iterative_reasoning'):
             print(f"Max reasoning steps: {results['configuration'].get('max_reasoning_steps', 5)}")
+        print(f"Concurrent processing: {args.concurrent}")
+        if args.concurrent:
+            print(f"Max concurrent requests: {results['configuration'].get('max_concurrent', 10)}")
         print(f"LLM Judge enabled: {results['configuration'].get('use_llm_judge', False)}")
         print(f"Total samples: {results['overall_metrics']['num_samples']}")
+        if results['overall_metrics'].get('failed_samples', 0) > 0:
+            print(f"Failed samples: {results['overall_metrics']['failed_samples']}")
         print(f"Accuracy: {results['overall_metrics']['accuracy']:.3f}")
         print(f"Precision: {results['overall_metrics']['precision']:.3f}")
         print(f"Recall: {results['overall_metrics']['recall']:.3f}")
