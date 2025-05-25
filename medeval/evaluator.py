@@ -883,7 +883,7 @@ Answer:"""
         return ground_truth_category in selected_categories
     
     def create_patient_data_summary(self, sample: Dict, num_inputs: int) -> str:
-        """Create a concise summary of patient data for reasoning steps"""
+        """Create a complete summary of patient data for reasoning steps"""
         
         input_descriptions = {
             1: "Chief Complaint",
@@ -898,10 +898,9 @@ Answer:"""
         for i in range(1, min(num_inputs + 1, 7)):
             input_key = f"input{i}"
             if input_key in sample:
-                # Truncate long text for reasoning steps
+                # Provide FULL clinical information - no truncation!
+                # Evidence-based reasoning requires complete patient data
                 content = sample[input_key]
-                if len(content) > 200:
-                    content = content[:200] + "..."
                 summary += f"• {input_descriptions[i]}: {content}\n"
         
         return summary.strip()

@@ -481,7 +481,11 @@ def show_sample_analysis(samples_dir: str = None, flowchart_dir: str = None):
     for i in range(1, 7):
         input_key = f"input{i}"
         if input_key in sample:
-            content = sample[input_key][:100] + "..." if len(sample[input_key]) > 100 else sample[input_key]
+            # Show FULL clinical content - no truncation for analysis
+            content = sample[input_key]
+            # Only truncate for display if extremely long (>500 chars)
+            if len(content) > 500:
+                content = content[:500] + f"... [truncated, full length: {len(sample[input_key])} chars]"
             print(f"   {i}. {input_descriptions[i]}: {repr(content)}")
     
     # Extract ground truth from path

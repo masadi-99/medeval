@@ -365,13 +365,12 @@ def format_reasoning_step(step_num: int, current_node: str, available_options: L
                 if isinstance(option_knowledge, dict):
                     prompt += f"   Clinical criteria:\n"
                     for key, value in option_knowledge.items():
-                        # Truncate very long criteria
-                        truncated_value = value[:200] + "..." if len(value) > 200 else value
-                        prompt += f"   • {key}: {truncated_value}\n"
+                        # Provide FULL clinical criteria - no truncation!
+                        # Evidence-based matching requires complete criteria
+                        prompt += f"   • {key}: {value}\n"
                 elif isinstance(option_knowledge, str):
-                    # Truncate long knowledge text
-                    truncated = option_knowledge[:250] + "..." if len(option_knowledge) > 250 else option_knowledge
-                    prompt += f"   Clinical criteria: {truncated}\n"
+                    # Provide FULL knowledge text - no truncation!
+                    prompt += f"   Clinical criteria: {option_knowledge}\n"
             else:
                 prompt += f"   (No specific clinical criteria available)\n"
         
