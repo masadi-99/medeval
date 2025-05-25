@@ -968,7 +968,7 @@ Answer:"""
             category_prompt = self.create_initial_category_selection_prompt(
                 patient_summary, selected_categories, flowcharts
             )
-            category_response = self.query_llm(category_prompt, max_tokens=800)
+            category_response = self.query_llm(category_prompt, max_tokens=200)
             current_category = self.parse_category_selection(category_response, selected_categories)
         
         if current_category not in flowcharts:
