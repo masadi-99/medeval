@@ -117,6 +117,7 @@ class CleanProgressiveReasoning:
                 'chosen_suspicion': step1_result['chosen_first_step'],  # FIXED: First step not category
                 'reasoning_successful': bool(matched_diagnosis),
                 'prompts_and_responses': prompts_and_responses,  # SINGLE SOURCE OF TRUTH
+                'reasoning_trace': prompts_and_responses,  # For compatibility with main evaluator
                 'mode': 'clean_step_by_step_fixed'
             }
             
