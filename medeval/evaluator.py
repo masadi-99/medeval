@@ -1770,24 +1770,31 @@ Answer:"""
 **STAGE 1 - Initial Assessment (History Only):**
 {history_summary}
 
-Based on this history, generate {num_suspicions} most likely diagnostic suspicions.
+**Available Disease Categories:**
+{chr(10).join(f"{i}. {cat}" for i, cat in enumerate(self.flowchart_categories, 1))}
+
+Based on this history, select {num_suspicions} most likely disease categories from the list above.
 
 **STAGE 2 - Test Planning:**
-For your suspicions, what physical exam and lab/imaging tests would be most helpful?
+For your chosen categories, what physical exam and lab/imaging tests would be most helpful to differentiate between them?
 
 **STAGE 3 - Final Assessment (Complete Information):**
 {full_summary}
 
-Now with complete clinical information available, choose your most likely diagnosis.
+Now with complete clinical information available, choose your most likely disease category and then provide a specific diagnosis.
+
+**Available Specific Diagnoses:**
+{', '.join(self.possible_diagnoses[:50])}...
 
 **INSTRUCTIONS:**
+• Choose categories from the disease categories list above
+• Choose final diagnosis from the specific diagnoses list
 • Use the complete clinical information to make your final diagnosis
-• Choose from these possible diagnoses: {', '.join(self.possible_diagnoses[:50])}...
-• Provide your final diagnosis as a specific medical condition
 
 **FORMAT:**
-**INITIAL SUSPICIONS:** [List {num_suspicions} suspicions]
+**INITIAL CATEGORY SUSPICIONS:** [List {num_suspicions} categories]
 **RECOMMENDED TESTS:** [Brief list of key tests]
+**CHOSEN CATEGORY:** [Best category from suspicions]
 **FINAL DIAGNOSIS:** [Specific diagnosis name from possible diagnoses]
 **REASONING:** [Brief explanation for final diagnosis]"""
         
@@ -1797,14 +1804,18 @@ Now with complete clinical information available, choose your most likely diagno
         # Parse response
         import re
         
-        # Extract suspicions
-        suspicions_match = re.search(r'INITIAL SUSPICIONS:\s*(.*?)(?=\*\*RECOMMENDED TESTS:|$)', response, re.DOTALL | re.IGNORECASE)
+        # Extract category suspicions
+        suspicions_match = re.search(r'INITIAL CATEGORY SUSPICIONS:\s*(.*?)(?=\*\*RECOMMENDED TESTS:|$)', response, re.DOTALL | re.IGNORECASE)
         suspicions_text = suspicions_match.group(1).strip() if suspicions_match else ""
         suspicions = self._parse_suspicions_from_text(suspicions_text, num_suspicions)
         
         # Extract recommended tests
-        tests_match = re.search(r'RECOMMENDED TESTS:\s*(.*?)(?=\*\*FINAL DIAGNOSIS:|$)', response, re.DOTALL | re.IGNORECASE)
+        tests_match = re.search(r'RECOMMENDED TESTS:\s*(.*?)(?=\*\*CHOSEN CATEGORY:|$)', response, re.DOTALL | re.IGNORECASE)
         recommended_tests = tests_match.group(1).strip() if tests_match else ""
+        
+        # Extract chosen category
+        category_match = re.search(r'CHOSEN CATEGORY:\s*(.*?)(?=\*\*FINAL DIAGNOSIS:|$)', response, re.DOTALL | re.IGNORECASE)
+        chosen_category = category_match.group(1).strip() if category_match else ""
         
         # Extract final diagnosis
         diagnosis_match = re.search(r'FINAL DIAGNOSIS:\s*(.*?)(?=\*\*REASONING:|$)', response, re.DOTALL | re.IGNORECASE)
@@ -1825,6 +1836,7 @@ Now with complete clinical information available, choose your most likely diagno
                 'response': response,
                 'suspicions': suspicions,
                 'recommended_tests': recommended_tests,
+                'chosen_category': chosen_category,
                 'final_diagnosis': final_diagnosis,
                 'matched_diagnosis': matched_diagnosis,
                 'reasoning': reasoning
@@ -1837,7 +1849,7 @@ Now with complete clinical information available, choose your most likely diagno
             'reasoning_steps': 1,
             'suspicions': suspicions,
             'recommended_tests': recommended_tests,
-            'chosen_suspicion': final_diagnosis,  # In fast mode, this is the final diagnosis
+            'chosen_suspicion': chosen_category,  # The chosen category
             'reasoning_successful': bool(matched_diagnosis)
         }
     
@@ -1942,30 +1954,30 @@ Now with complete clinical information available, choose your most likely diagno
     def create_suspicions_prompt(self, history_summary: str, num_suspicions: int) -> str:
         """Create prompt for generating initial suspicions based on history"""
         
-        prompt = "You are a medical expert generating initial diagnostic suspicions based on patient history.\n\n"
+        prompt = "You are a medical expert generating initial diagnostic category suspicions based on patient history.\n\n"
         
         prompt += f"**Patient History:**\n{history_summary}\n\n"
         
-        # CRITICAL: Provide the list of possible diagnoses to constrain suspicions
-        prompt += f"**Available Diagnoses to Consider:**\n"
-        for i, diagnosis in enumerate(self.possible_diagnoses, 1):
-            prompt += f"{i}. {diagnosis}\n"
+        # CRITICAL: Provide the list of disease categories (not specific diagnoses)
+        prompt += f"**Available Disease Categories to Consider:**\n"
+        for i, category in enumerate(self.flowchart_categories, 1):
+            prompt += f"{i}. {category}\n"
         prompt += "\n"
         
-        prompt += f"Based on the patient history above, select the {num_suspicions} most likely diagnostic suspicions from the available diagnoses list.\n\n"
+        prompt += f"Based on the patient history above, select the {num_suspicions} most likely disease categories from the available categories list.\n\n"
         
         prompt += f"**Instructions:**\n"
-        prompt += f"• Choose ONLY from the available diagnoses listed above\n"
+        prompt += f"• Choose ONLY from the available disease categories listed above\n"
         prompt += f"• Consider the historical information provided\n"
-        prompt += f"• Focus on the most likely diagnoses given the presentation\n"
-        prompt += f"• List suspicions in order of likelihood\n"
-        prompt += f"• Use the exact diagnosis names from the list\n\n"
+        prompt += f"• Focus on the most likely disease categories given the presentation\n"
+        prompt += f"• List category suspicions in order of likelihood\n"
+        prompt += f"• Use the exact category names from the list\n\n"
         
         prompt += f"**Format:**\n"
         for i in range(1, num_suspicions + 1):
-            prompt += f"{i}. [Exact diagnosis name from available list]\n"
+            prompt += f"{i}. [Exact category name from available list]\n"
         
-        prompt += f"\nTop {num_suspicions} Diagnostic Suspicions:"
+        prompt += f"\nTop {num_suspicions} Disease Category Suspicions:"
         
         return prompt
     
@@ -2100,8 +2112,13 @@ Now with complete clinical information available, choose your most likely diagno
                                       all_suspicions: List[str], max_steps: int = 5) -> Dict:
         """Iterative reasoning starting from chosen suspicion"""
         
-        # Try to map suspicion to a category for flowchart navigation
-        suspected_category = self.map_suspicion_to_category(chosen_suspicion)
+        # First check if chosen_suspicion is already a category name
+        suspected_category = None
+        if chosen_suspicion in self.flowchart_categories:
+            suspected_category = chosen_suspicion
+        else:
+            # Try to map suspicion to a category for flowchart navigation
+            suspected_category = self.map_suspicion_to_category(chosen_suspicion)
         
         if suspected_category:
             # Use iterative reasoning with this category, including possible diagnoses
