@@ -209,6 +209,19 @@ def main():
                 print(f"Fast mode: Enabled (combined stages for better performance)")
             else:
                 print(f"Fast mode: Disabled (full 4-stage workflow)")
+            
+            # Display test overlap metrics
+            if 'test_overlap_precision' in results['overall_metrics']:
+                print(f"\n📊 Test Overlap Metrics:")
+                print(f"  Precision: {results['overall_metrics']['test_overlap_precision']:.3f} (avoiding unnecessary tests)")
+                print(f"  Recall: {results['overall_metrics']['test_overlap_recall']:.3f} (not missing necessary tests)")
+                print(f"  F1-Score: {results['overall_metrics']['test_overlap_f1']:.3f}")
+                print(f"  Jaccard Index: {results['overall_metrics']['test_overlap_jaccard']:.3f}")
+                print(f"  Avg Tests Recommended: {results['overall_metrics']['avg_tests_recommended']:.1f}")
+                print(f"  Avg Tests Actually Done: {results['overall_metrics']['avg_tests_actual']:.1f}")
+                print(f"  Avg Test Overlap: {results['overall_metrics']['avg_tests_overlap']:.1f}")
+                print(f"  Avg Unnecessary Tests: {results['overall_metrics']['avg_unnecessary_tests']:.1f}")
+                print(f"  Avg Missed Tests: {results['overall_metrics']['avg_missed_tests']:.1f}")
         print(f"Concurrent processing: {args.concurrent}")
         if args.concurrent:
             print(f"Max concurrent requests: {results['configuration'].get('max_concurrent', 10)}")

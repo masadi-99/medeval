@@ -369,6 +369,9 @@ Answer:"""
             chosen_suspicion = progressive_result['chosen_suspicion']
             reasoning_steps = progressive_result['reasoning_steps']
             
+            # CRITICAL: Calculate test overlap metrics for progressive reasoning
+            test_overlap_metrics = self.calculate_test_overlap_metrics(recommended_tests, sample)
+            
             if self.show_responses:
                 print(f"Sample: {sample_path}")
                 print(f"Disease Category: {disease_category}")
@@ -377,6 +380,15 @@ Answer:"""
                 print(f"  Stage 2 - Recommended Tests: {recommended_tests[:100]}...")
                 print(f"  Stage 3 - Chosen Suspicion: {chosen_suspicion}")
                 print(f"  Stage 4 - Reasoning Steps: {reasoning_steps}")
+                print(f"Test Overlap Metrics:")
+                print(f"  Precision: {test_overlap_metrics['test_overlap_precision']:.3f} (avoiding unnecessary tests)")
+                print(f"  Recall: {test_overlap_metrics['test_overlap_recall']:.3f} (not missing necessary tests)")
+                print(f"  F1-Score: {test_overlap_metrics['test_overlap_f1']:.3f}")
+                print(f"  Recommended: {test_overlap_metrics['tests_recommended_count']}, Actual: {test_overlap_metrics['tests_actual_count']}, Overlap: {test_overlap_metrics['tests_overlap_count']}")
+                if test_overlap_metrics['unnecessary_tests_list']:
+                    print(f"  Unnecessary: {test_overlap_metrics['unnecessary_tests_list']}")
+                if test_overlap_metrics['missed_tests_list']:
+                    print(f"  Missed: {test_overlap_metrics['missed_tests_list']}")
                 print(f"Final Diagnosis: '{predicted}'")
                 print(f"Ground Truth: '{ground_truth}'")
                 print()
@@ -508,7 +520,8 @@ Answer:"""
                 'recommended_tests': recommended_tests,
                 'chosen_suspicion': chosen_suspicion,
                 'reasoning_trace': reasoning_trace,
-                'reasoning_steps': reasoning_steps
+                'reasoning_steps': reasoning_steps,
+                'test_overlap_metrics': test_overlap_metrics
             })
         elif iterative_reasoning:
             result.update({
@@ -711,6 +724,50 @@ Answer:"""
                 overall_metrics['reasoning_path_accuracy'] = reasoning_path_accuracy
             
             # Calculate average reasoning steps
+            reasoning_steps = [r.get('reasoning_steps', 0) for r in results 
+                             if r.get('reasoning_steps') is not None]
+            if reasoning_steps:
+                avg_reasoning_steps = sum(reasoning_steps) / len(reasoning_steps)
+                overall_metrics['avg_reasoning_steps'] = avg_reasoning_steps
+        
+        if progressive_reasoning:
+            # Calculate test overlap metrics
+            test_overlap_precision_scores = [r.get('test_overlap_metrics', {}).get('test_overlap_precision', 0) for r in results 
+                                           if r.get('test_overlap_metrics') is not None]
+            test_overlap_recall_scores = [r.get('test_overlap_metrics', {}).get('test_overlap_recall', 0) for r in results 
+                                        if r.get('test_overlap_metrics') is not None]
+            test_overlap_f1_scores = [r.get('test_overlap_metrics', {}).get('test_overlap_f1', 0) for r in results 
+                                    if r.get('test_overlap_metrics') is not None]
+            test_overlap_jaccard_scores = [r.get('test_overlap_metrics', {}).get('test_overlap_jaccard', 0) for r in results 
+                                         if r.get('test_overlap_metrics') is not None]
+            
+            # Calculate overall test overlap performance
+            if test_overlap_precision_scores:
+                overall_metrics['test_overlap_precision'] = sum(test_overlap_precision_scores) / len(test_overlap_precision_scores)
+                overall_metrics['test_overlap_recall'] = sum(test_overlap_recall_scores) / len(test_overlap_recall_scores)
+                overall_metrics['test_overlap_f1'] = sum(test_overlap_f1_scores) / len(test_overlap_f1_scores)
+                overall_metrics['test_overlap_jaccard'] = sum(test_overlap_jaccard_scores) / len(test_overlap_jaccard_scores)
+            
+            # Calculate average test counts
+            recommended_counts = [r.get('test_overlap_metrics', {}).get('tests_recommended_count', 0) for r in results 
+                                if r.get('test_overlap_metrics') is not None]
+            actual_counts = [r.get('test_overlap_metrics', {}).get('tests_actual_count', 0) for r in results 
+                           if r.get('test_overlap_metrics') is not None]
+            overlap_counts = [r.get('test_overlap_metrics', {}).get('tests_overlap_count', 0) for r in results 
+                            if r.get('test_overlap_metrics') is not None]
+            unnecessary_counts = [r.get('test_overlap_metrics', {}).get('unnecessary_tests_count', 0) for r in results 
+                                if r.get('test_overlap_metrics') is not None]
+            missed_counts = [r.get('test_overlap_metrics', {}).get('missed_tests_count', 0) for r in results 
+                           if r.get('test_overlap_metrics') is not None]
+            
+            if recommended_counts:
+                overall_metrics['avg_tests_recommended'] = sum(recommended_counts) / len(recommended_counts)
+                overall_metrics['avg_tests_actual'] = sum(actual_counts) / len(actual_counts)
+                overall_metrics['avg_tests_overlap'] = sum(overlap_counts) / len(overlap_counts)
+                overall_metrics['avg_unnecessary_tests'] = sum(unnecessary_counts) / len(unnecessary_counts)
+                overall_metrics['avg_missed_tests'] = sum(missed_counts) / len(missed_counts)
+            
+            # Calculate average reasoning steps for progressive reasoning
             reasoning_steps = [r.get('reasoning_steps', 0) for r in results 
                              if r.get('reasoning_steps') is not None]
             if reasoning_steps:
@@ -1356,6 +1413,9 @@ Answer:"""
             reasoning_trace = progressive_result['reasoning_trace']
             reasoning_steps = progressive_result['reasoning_steps']
             
+            # Calculate test overlap metrics for progressive reasoning
+            test_overlap_metrics = self.calculate_test_overlap_metrics(recommended_tests, sample)
+            
         elif iterative_reasoning:
             # Step 1: Category selection
             category_prompt = self.create_category_selection_prompt(sample, num_inputs, num_categories)
@@ -1471,7 +1531,17 @@ Answer:"""
         }
         
         # Add mode-specific information
-        if iterative_reasoning:
+        if progressive_reasoning:
+            result.update({
+                'progressive_reasoning': True,
+                'suspicions_generated': suspicions_generated,
+                'recommended_tests': recommended_tests,
+                'chosen_suspicion': chosen_suspicion,
+                'reasoning_trace': reasoning_trace,
+                'reasoning_steps': reasoning_steps,
+                'test_overlap_metrics': test_overlap_metrics
+            })
+        elif iterative_reasoning:
             result.update({
                 'iterative_reasoning': True,
                 'category_selection_response': category_response,
@@ -2181,3 +2251,206 @@ Now with complete clinical information available, choose your most likely diseas
                             return flowchart_category
         
         return None 
+
+    def extract_tests_from_recommendations(self, recommended_tests: str) -> List[str]:
+        """Extract individual test names from LLM recommendations"""
+        
+        # Common test abbreviations and their full names
+        test_mappings = {
+            'cbc': 'complete blood count',
+            'bmp': 'basic metabolic panel',
+            'cmp': 'comprehensive metabolic panel',
+            'lipid panel': 'lipid profile',
+            'liver function': 'liver function tests',
+            'lft': 'liver function tests',
+            'kidney function': 'renal function tests',
+            'rft': 'renal function tests',
+            'cardiac enzymes': 'troponin',
+            'troponins': 'troponin',
+            'ekg': 'electrocardiogram',
+            'ecg': 'electrocardiogram',
+            'chest x-ray': 'chest xray',
+            'cxr': 'chest xray',
+            'ct scan': 'ct',
+            'mri scan': 'mri',
+            'urinalysis': 'urine analysis',
+            'ua': 'urine analysis',
+            'blood pressure': 'bp',
+            'heart rate': 'pulse',
+            'respiratory rate': 'breathing',
+            'temperature': 'temp',
+            'oxygen saturation': 'spo2',
+            'pulse oximetry': 'spo2'
+        }
+        
+        import re
+        
+        # Convert to lowercase for processing
+        text = recommended_tests.lower()
+        
+        # Extract potential test names
+        extracted_tests = set()
+        
+        # Look for common patterns
+        patterns = [
+            r'\b(?:order|obtain|check|perform|do)\s+([a-zA-Z0-9\s]+?)(?:\s+to|\s+for|\s+in|\.|\,|$)',
+            r'\b(cbc|bmp|cmp|troponin|ekg|ecg|chest x-ray|cxr|ct|mri|urinalysis|ua)\b',
+            r'\b(complete blood count|basic metabolic|comprehensive metabolic|liver function|cardiac enzymes)\b',
+            r'\b(blood pressure|heart rate|respiratory rate|temperature|pulse|breathing)\b',
+            r'\b([a-zA-Z]+\s+(?:levels?|test|exam|study|scan|panel|profile|analysis))\b',
+            r'\b(?:physical exam|examination):\s*([a-zA-Z0-9\s,]+?)(?:\n|$)',
+            r'\b(?:lab|laboratory):\s*([a-zA-Z0-9\s,]+?)(?:\n|$)',
+            r'\b(?:imaging|radiology):\s*([a-zA-Z0-9\s,]+?)(?:\n|$)'
+        ]
+        
+        for pattern in patterns:
+            matches = re.finditer(pattern, text)
+            for match in matches:
+                test_name = match.group(1).strip()
+                if test_name and len(test_name) > 2:
+                    # Clean up the test name
+                    test_name = re.sub(r'[^\w\s]', '', test_name)
+                    test_name = ' '.join(test_name.split())
+                    
+                    # Apply mappings
+                    normalized = test_mappings.get(test_name, test_name)
+                    extracted_tests.add(normalized)
+        
+        # Also look for bullet points and numbered lists
+        lines = text.split('\n')
+        for line in lines:
+            line = line.strip()
+            if re.match(r'^[•\-\*\d+\.]\s*', line):
+                # Remove bullet/number prefix
+                clean_line = re.sub(r'^[•\-\*\d+\.]\s*', '', line)
+                clean_line = re.sub(r'[^\w\s]', '', clean_line)
+                clean_line = ' '.join(clean_line.split())
+                
+                if clean_line and len(clean_line) > 2:
+                    # Apply mappings
+                    normalized = test_mappings.get(clean_line, clean_line)
+                    extracted_tests.add(normalized)
+        
+        return list(extracted_tests)
+    
+    def extract_tests_from_clinical_data(self, sample: Dict) -> List[str]:
+        """Extract test names from actual clinical data (inputs 5 and 6)"""
+        
+        # Test indicators in clinical text
+        test_indicators = {
+            'complete blood count': ['cbc', 'complete blood count', 'blood count'],
+            'troponin': ['troponin', 'cardiac enzymes', 'troponin i', 'troponin t'],
+            'electrocardiogram': ['ekg', 'ecg', 'electrocardiogram'],
+            'chest xray': ['chest x-ray', 'cxr', 'chest xray', 'chest radiograph'],
+            'ct': ['ct scan', 'computed tomography', 'ct chest', 'ct abdomen'],
+            'mri': ['mri', 'magnetic resonance', 'mri brain'],
+            'urine analysis': ['urinalysis', 'ua', 'urine analysis', 'urine test'],
+            'liver function tests': ['lft', 'liver function', 'alt', 'ast', 'bilirubin'],
+            'renal function tests': ['creatinine', 'bun', 'kidney function', 'renal function'],
+            'lipid profile': ['lipid panel', 'cholesterol', 'triglycerides', 'hdl', 'ldl'],
+            'glucose': ['glucose', 'blood sugar', 'blood glucose'],
+            'bp': ['blood pressure', 'bp', 'hypertension', 'hypotension'],
+            'pulse': ['heart rate', 'pulse', 'hr'],
+            'breathing': ['respiratory rate', 'rr', 'breathing'],
+            'temp': ['temperature', 'fever', 'temp'],
+            'spo2': ['oxygen saturation', 'spo2', 'pulse oximetry', 'o2 sat']
+        }
+        
+        import re
+        
+        # Combine physical exam and lab results
+        clinical_text = ""
+        if 'input5' in sample:  # Physical Examination
+            clinical_text += sample['input5'].lower() + " "
+        if 'input6' in sample:  # Laboratory Results
+            clinical_text += sample['input6'].lower() + " "
+        
+        # Find tests that were actually performed
+        performed_tests = set()
+        
+        for test_name, indicators in test_indicators.items():
+            for indicator in indicators:
+                # Look for the indicator in the clinical text
+                if re.search(r'\b' + re.escape(indicator) + r'\b', clinical_text):
+                    performed_tests.add(test_name)
+                    break  # Found one indicator for this test
+        
+        # Look for numerical values that indicate lab results
+        lab_patterns = [
+            r'\b(?:wbc|white blood cell)\s*:?\s*[\d\.,]+',
+            r'\b(?:hgb|hemoglobin)\s*:?\s*[\d\.,]+',
+            r'\b(?:plt|platelet)\s*:?\s*[\d\.,]+',
+            r'\b(?:sodium|na)\s*:?\s*[\d\.,]+',
+            r'\b(?:potassium|k)\s*:?\s*[\d\.,]+',
+            r'\b(?:chloride|cl)\s*:?\s*[\d\.,]+',
+            r'\b(?:co2|bicarbonate)\s*:?\s*[\d\.,]+',
+            r'\b(?:bun|urea)\s*:?\s*[\d\.,]+',
+            r'\b(?:creatinine|cr)\s*:?\s*[\d\.,]+',
+            r'\b(?:glucose|glu)\s*:?\s*[\d\.,]+',
+        ]
+        
+        for pattern in lab_patterns:
+            if re.search(pattern, clinical_text):
+                # Determine which test this result belongs to
+                if 'wbc' in pattern or 'hemoglobin' in pattern or 'platelet' in pattern:
+                    performed_tests.add('complete blood count')
+                elif 'sodium' in pattern or 'potassium' in pattern or 'chloride' in pattern or 'co2' in pattern:
+                    performed_tests.add('basic metabolic panel')
+                elif 'bun' in pattern or 'creatinine' in pattern:
+                    performed_tests.add('renal function tests')
+                elif 'glucose' in pattern:
+                    performed_tests.add('glucose')
+        
+        return list(performed_tests)
+    
+    def calculate_test_overlap_metrics(self, recommended_tests: str, sample: Dict) -> Dict:
+        """Calculate overlap metrics between recommended and actual tests"""
+        
+        # Extract test lists
+        recommended = set(self.extract_tests_from_recommendations(recommended_tests))
+        actual = set(self.extract_tests_from_clinical_data(sample))
+        
+        # Remove empty strings
+        recommended = {t for t in recommended if t.strip()}
+        actual = {t for t in actual if t.strip()}
+        
+        # Calculate metrics
+        intersection = recommended & actual
+        union = recommended | actual
+        
+        # Basic counts
+        num_recommended = len(recommended)
+        num_actual = len(actual)
+        num_overlap = len(intersection)
+        
+        # Calculate metrics (handle division by zero)
+        precision = num_overlap / num_recommended if num_recommended > 0 else 0
+        recall = num_overlap / num_actual if num_actual > 0 else 0
+        f1_score = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+        jaccard_index = num_overlap / len(union) if len(union) > 0 else 0
+        
+        # Additional metrics
+        unnecessary_tests = recommended - actual  # Tests recommended but not done
+        missed_tests = actual - recommended       # Tests done but not recommended
+        
+        unnecessary_rate = len(unnecessary_tests) / num_recommended if num_recommended > 0 else 0
+        missed_rate = len(missed_tests) / num_actual if num_actual > 0 else 0
+        
+        return {
+            'test_overlap_precision': precision,
+            'test_overlap_recall': recall,
+            'test_overlap_f1': f1_score,
+            'test_overlap_jaccard': jaccard_index,
+            'tests_recommended_count': num_recommended,
+            'tests_actual_count': num_actual,
+            'tests_overlap_count': num_overlap,
+            'unnecessary_tests_count': len(unnecessary_tests),
+            'missed_tests_count': len(missed_tests),
+            'unnecessary_tests_rate': unnecessary_rate,
+            'missed_tests_rate': missed_rate,
+            'recommended_tests_list': list(recommended),
+            'actual_tests_list': list(actual),
+            'overlap_tests_list': list(intersection),
+            'unnecessary_tests_list': list(unnecessary_tests),
+            'missed_tests_list': list(missed_tests)
+        }
