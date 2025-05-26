@@ -556,8 +556,18 @@ class CleanProgressiveReasoning:
     def _parse_flowchart_step_choice(self, response: str, options: List[str]) -> str:
         """Parse chosen step from flowchart step response"""
         
-        # Extract from CHOSEN STEP section
-        chosen_match = re.search(r'CHOSEN STEP:\s*(\d+)\s*-\s*(.+?)(?=\n|\Z)', 
+        # First try flexible pattern for "CHOSEN STEP" with number (this works reliably)
+        flexible_match = re.search(r'CHOSEN STEP.*?(\d+)', response, re.IGNORECASE)
+        if flexible_match:
+            try:
+                choice_num = int(flexible_match.group(1))
+                if 1 <= choice_num <= len(options):
+                    return options[choice_num - 1]
+            except ValueError:
+                pass
+        
+        # Extract from CHOSEN STEP section (handle both with and without asterisks)
+        chosen_match = re.search(r'\*?\*?CHOSEN STEP\*?\*?:\s*(\d+)\s*-\s*(.+?)(?=\n|\Z)', 
                                response, re.IGNORECASE)
         
         if chosen_match:
@@ -568,7 +578,7 @@ class CleanProgressiveReasoning:
             except ValueError:
                 pass
         
-        # Fallback: any number
+        # Fallback: any number in the response
         number_match = re.search(r'\b(\d+)\b', response)
         if number_match:
             try:
