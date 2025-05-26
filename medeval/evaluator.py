@@ -1419,11 +1419,13 @@ Answer:"""
         api_calls = []
         
         if progressive_reasoning:
-            # Progressive reasoning workflow - multiple sequential stages
-            # For now, use synchronous approach within async function
-            # Could be optimized further for concurrent API calls
-            progressive_result = self.progressive_reasoning_workflow(
-                sample, num_suspicions, max_reasoning_steps, fast_mode=progressive_fast_mode
+            # Progressive reasoning workflow - use async version for proper concurrency
+            clean_reasoning = CleanProgressiveReasoning(evaluator=self)
+            progressive_result = await clean_reasoning.run_progressive_workflow_async(
+                sample=sample, 
+                num_candidates=num_suspicions, 
+                max_reasoning_steps=max_reasoning_steps,
+                request_prefix=sample_path  # Use sample path as unique request prefix
             )
             
             predicted = progressive_result['final_diagnosis']

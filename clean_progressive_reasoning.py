@@ -17,6 +17,7 @@ CRITICAL FIXES:
 from typing import Dict, List, Optional, Tuple
 import re
 import json
+import asyncio
 
 # Import flowchart utilities (these need to exist in the main codebase)
 try:
@@ -28,7 +29,7 @@ try:
 except ImportError:
     # Fallback implementations if utilities don't exist
     def load_flowchart_content(category: str, flowchart_dir: str) -> Dict:
-        return {"mock": "flowchart"}
+        return {"mock": "data"}
     
     def get_flowchart_knowledge(data: Dict) -> Dict:
         return {"mock": "knowledge"}
@@ -37,7 +38,7 @@ except ImportError:
         return {"mock": "structure"}
     
     def get_flowchart_children(structure: Dict, node: str) -> List[str]:
-        return ["mock_child_1", "mock_child_2"]
+        return ["child1", "child2"]
     
     def is_leaf_diagnosis(structure: Dict, node: str) -> bool:
         return False
@@ -125,6 +126,71 @@ class CleanProgressiveReasoning:
             print(f"❌ Error in progressive workflow: {e}")
             return self._create_failure_result(f"Workflow error: {e}", prompts_and_responses)
     
+    async def run_progressive_workflow_async(self, sample: Dict, num_candidates: int = 3, 
+                                           max_reasoning_steps: int = 5, request_prefix: str = "") -> Dict:
+        """
+        Async version of progressive reasoning workflow with proper request tracking.
+        
+        Args:
+            sample: Clinical sample data
+            num_candidates: Number of initial candidates (k=3)
+            max_reasoning_steps: Max steps after step 1
+            request_prefix: Unique prefix for tracking requests (e.g., sample path)
+            
+        Returns:
+            Complete results with all prompts/responses saved (NO REDUNDANCY)
+        """
+        
+        # Track ALL steps with prompts and responses - SINGLE SOURCE OF TRUTH
+        prompts_and_responses = []
+        
+        try:
+            # STEP 0: History → Choose k candidate diagnoses
+            step0_result = await self._step0_choose_candidates_async(sample, num_candidates, f"{request_prefix}_step0")
+            prompts_and_responses.append(step0_result)
+            
+            if not step0_result.get('chosen_candidates'):
+                return self._create_failure_result("Step 0 failed: No candidates chosen", prompts_and_responses)
+            
+            # STEP 1: Exams/results + flowcharts → Choose starting diagnosis FROM FLOWCHART FIRST STEPS
+            step1_result = await self._step1_choose_flowchart_first_step_async(
+                sample, step0_result['chosen_candidates'], f"{request_prefix}_step1"
+            )
+            prompts_and_responses.append(step1_result)
+            
+            if not step1_result.get('chosen_first_step'):
+                return self._create_failure_result("Step 1 failed: No first step chosen", prompts_and_responses)
+            
+            # STEP 2-n: Flowchart-guided reasoning to final diagnosis
+            flowchart_steps = await self._steps2_n_flowchart_iteration_async(
+                sample, 
+                step1_result['chosen_first_step'],
+                step1_result['flowchart_category'], 
+                max_reasoning_steps,
+                f"{request_prefix}_flowchart"
+            )
+            prompts_and_responses.extend(flowchart_steps)
+            
+            # Determine final diagnosis from last step
+            final_diagnosis = prompts_and_responses[-1].get('current_diagnosis', step1_result['chosen_first_step'])
+            matched_diagnosis = self.evaluator.find_best_match(final_diagnosis)
+            
+            return {
+                'final_diagnosis': matched_diagnosis,
+                'reasoning_steps': len(prompts_and_responses),
+                'suspicions': step0_result['chosen_candidates'],
+                'recommended_tests': step1_result.get('flowcharts_requested', ''),
+                'chosen_suspicion': step1_result['chosen_first_step'],  # FIXED: First step not category
+                'reasoning_successful': bool(matched_diagnosis),
+                'prompts_and_responses': prompts_and_responses,  # SINGLE SOURCE OF TRUTH
+                'reasoning_trace': prompts_and_responses,  # For compatibility with main evaluator
+                'mode': 'clean_step_by_step_fixed_async'
+            }
+            
+        except Exception as e:
+            print(f"❌ Error in async progressive workflow: {e}")
+            return self._create_failure_result(f"Async workflow error: {e}", prompts_and_responses)
+    
     def _step0_choose_candidates(self, sample: Dict, num_candidates: int) -> Dict:
         """
         Step 0: History (inputs 1-4) + possible diagnoses list → Choose k top candidates
@@ -151,6 +217,40 @@ class CleanProgressiveReasoning:
             'chosen_candidates': chosen_candidates,
             'history_summary': history_summary,
             'reasoning': self._extract_step0_reasoning(response)
+        }
+    
+    async def _step0_choose_candidates_async(self, sample: Dict, num_candidates: int, request_id: str) -> Dict:
+        """
+        Async version: Step 0: History (inputs 1-4) + possible diagnoses list → Choose k top candidates
+        """
+        
+        # Create history summary (inputs 1-4 only)
+        history_summary = self._create_history_only_summary(sample)
+        
+        # Create Step 0 prompt
+        prompt = self._create_step0_prompt(history_summary, num_candidates)
+        
+        # Query LLM async with request tracking
+        response_data = await self.evaluator.query_llm_async(prompt, request_id, max_tokens=800)
+        
+        if not response_data['success']:
+            raise Exception(f"Step 0 API call failed: {response_data['error']}")
+        
+        response = response_data['response']
+        
+        # Parse candidates
+        chosen_candidates = self._parse_step0_candidates(response, num_candidates)
+        
+        return {
+            'step': 0,
+            'stage': 'step0_candidate_selection',
+            'action': 'choose_candidates',
+            'prompt': prompt,
+            'response': response,
+            'chosen_candidates': chosen_candidates,
+            'history_summary': history_summary,
+            'reasoning': self._extract_step0_reasoning(response),
+            'request_id': request_id
         }
     
     def _step1_choose_flowchart_first_step(self, sample: Dict, candidates: List[str]) -> Dict:
@@ -184,6 +284,45 @@ class CleanProgressiveReasoning:
             'chosen_first_step': chosen_first_step,  # e.g., "Suspected Pneumonia"
             'flowchart_category': flowchart_category,  # e.g., "Pneumonia"
             'reasoning': self._extract_step1_reasoning(response)
+        }
+    
+    async def _step1_choose_flowchart_first_step_async(self, sample: Dict, candidates: List[str], request_id: str) -> Dict:
+        """
+        Async version: IMPROVED Step 1: Load flowcharts and ask LLM to choose from initial diagnoses
+        """
+        
+        # Get complete clinical information (all 6 inputs)
+        full_summary = self.evaluator.create_patient_data_summary(sample, 6)
+        
+        # Load complete flowcharts for candidates
+        flowchart_info, loaded_flowcharts = self._load_complete_flowcharts(candidates)
+        
+        # Create Step 1 prompt with complete flowchart structures
+        prompt = self._create_step1_improved_prompt(full_summary, flowchart_info)
+        
+        # Query LLM async with request tracking
+        response_data = await self.evaluator.query_llm_async(prompt, request_id, max_tokens=1000)
+        
+        if not response_data['success']:
+            raise Exception(f"Step 1 API call failed: {response_data['error']}")
+        
+        response = response_data['response']
+        
+        # Parse chosen FIRST STEP and flowchart
+        chosen_first_step, flowchart_category = self._parse_step1_first_step_choice(
+            response, flowchart_info, loaded_flowcharts
+        )
+        
+        return {
+            'step': 1,
+            'stage': 'step1_flowchart_first_step_selection',
+            'action': 'choose_flowchart_first_step',
+            'prompt': prompt,
+            'response': response,
+            'chosen_first_step': chosen_first_step,  # e.g., "Suspected Pneumonia"
+            'flowchart_category': flowchart_category,  # e.g., "Pneumonia"
+            'reasoning': self._extract_step1_reasoning(response),
+            'request_id': request_id
         }
     
     def _steps2_n_flowchart_iteration(self, sample: Dict, starting_first_step: str, 
@@ -243,6 +382,59 @@ class CleanProgressiveReasoning:
         
         return steps
     
+    async def _steps2_n_flowchart_iteration_async(self, sample: Dict, starting_first_step: str, 
+                                                 flowchart_category: str, max_steps: int, request_prefix: str) -> List[Dict]:
+        """
+        Async version: FIXED Steps 2-n: Patient info + flowchart position → Iterate step by step until leaf node
+        """
+        
+        steps = []
+        current_node = starting_first_step  # Start from chosen first step
+        step_number = 2
+        
+        # Get complete clinical information
+        full_summary = self.evaluator.create_patient_data_summary(sample, 6)
+        
+        # Load flowchart structure
+        try:
+            flowchart_data = load_flowchart_content(flowchart_category, self.flowchart_dir)
+            flowchart_structure = get_flowchart_structure(flowchart_data)
+            flowchart_knowledge = get_flowchart_knowledge(flowchart_data)
+        except Exception as e:
+            print(f"Warning: Could not load flowchart for {flowchart_category}: {e}")
+            return [{
+                'step': 2,
+                'stage': 'step2_flowchart_unavailable',
+                'action': 'flowchart_unavailable',
+                'response': f"Flowchart for {flowchart_category} unavailable",
+                'current_diagnosis': starting_first_step
+            }]
+        
+        # Iterate through flowchart until leaf node or max steps
+        while step_number <= max_steps + 1:
+            # Check if we've reached a leaf diagnosis
+            if is_leaf_diagnosis(flowchart_structure, current_node):
+                break
+            
+            # Get next possible steps in flowchart
+            next_options = get_flowchart_children(flowchart_structure, current_node)
+            
+            if not next_options:
+                break
+            
+            # Reason through flowchart step async
+            step_result = await self._reason_flowchart_step_async(
+                sample, current_node, next_options, step_number,
+                full_summary, flowchart_knowledge, f"{request_prefix}_step{step_number}"
+            )
+            steps.append(step_result)
+            
+            # Move to chosen next step
+            current_node = step_result.get('chosen_diagnosis', current_node)
+            step_number += 1
+        
+        return steps
+    
     def _reason_flowchart_step(self, sample: Dict, current_node: str,
                               next_options: List[str], step_number: int,
                               full_summary: str, flowchart_knowledge: Dict) -> Dict:
@@ -269,6 +461,43 @@ class CleanProgressiveReasoning:
             'chosen_diagnosis': chosen_diagnosis,
             'current_diagnosis': chosen_diagnosis,  # For final diagnosis extraction
             'reasoning': self._extract_flowchart_reasoning(response)
+        }
+    
+    async def _reason_flowchart_step_async(self, sample: Dict, current_node: str,
+                                         next_options: List[str], step_number: int,
+                                         full_summary: str, flowchart_knowledge: Dict, request_id: str) -> Dict:
+        """
+        Async version: Reason through one step of flowchart navigation
+        """
+        
+        # Create flowchart step prompt
+        prompt = self._create_flowchart_step_prompt(
+            full_summary, current_node, next_options, step_number, flowchart_knowledge
+        )
+        
+        # Query LLM async with request tracking
+        response_data = await self.evaluator.query_llm_async(prompt, request_id, max_tokens=800)
+        
+        if not response_data['success']:
+            # Fallback to first option if API call fails
+            chosen_diagnosis = next_options[0] if next_options else current_node
+            response = f"API call failed, defaulting to: {chosen_diagnosis}"
+        else:
+            response = response_data['response']
+            chosen_diagnosis = self._parse_flowchart_step_choice(response, next_options)
+        
+        return {
+            'step': step_number,
+            'stage': f'step{step_number}_flowchart_reasoning',
+            'action': 'flowchart_step_reasoning',
+            'prompt': prompt,
+            'response': response,
+            'current_node': current_node,
+            'next_options': next_options,
+            'chosen_diagnosis': chosen_diagnosis,
+            'current_diagnosis': chosen_diagnosis,
+            'reasoning': self._extract_flowchart_reasoning(response),
+            'request_id': request_id
         }
     
     # === PROMPT CREATION METHODS ===
