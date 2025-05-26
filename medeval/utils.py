@@ -351,6 +351,34 @@ def is_leaf_diagnosis(flowchart_structure: Dict, node: str) -> bool:
     return result if result is not None else False
 
 
+def get_flowchart_first_step(flowchart_data: Dict) -> str:
+    """Get the first step/starting point of a flowchart"""
+    
+    # Try to get from flowchart structure
+    if 'diagnostic' in flowchart_data:
+        structure = flowchart_data['diagnostic']
+        if isinstance(structure, dict) and structure:
+            # Get the first key (root node) from the diagnostic tree
+            first_key = list(structure.keys())[0]
+            
+            # Create a more descriptive first step name
+            if 'suspected' not in first_key.lower():
+                if 'acute' in first_key.lower() or 'chronic' in first_key.lower():
+                    return first_key  # Already descriptive
+                else:
+                    return f"Suspected {first_key}"
+            else:
+                return first_key
+    
+    # Fallback: use the category name from flowchart data
+    if 'category' in flowchart_data:
+        category = flowchart_data['category']
+        return f"Suspected {category}"
+    
+    # Final fallback: generic starting point
+    return "Initial Assessment"
+
+
 def format_reasoning_step(step_num: int, current_node: str, available_options: List[str], 
                          knowledge: Dict, patient_data_summary: str) -> str:
     """Format a single reasoning step prompt"""

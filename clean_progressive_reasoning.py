@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """
-Clean Progressive Reasoning System - From Scratch
-Based on user's exact specifications:
+Clean Progressive Reasoning System - FIXED VERSION
+Based on user's exact specifications with critical fixes:
 
 Step 0: History (inputs 1-4) + possible diagnoses list → Choose k=3 top candidates
-Step 1: Exams/results (inputs 5-6) + k flowcharts → Choose starting diagnosis  
-Step 2-n: Patient info + flowchart position → Reason to next step until leaf node
+Step 1: Exams/results (inputs 5-6) + k flowcharts → Choose starting diagnosis FROM FLOWCHART FIRST STEPS
+Step 2-n: Patient info + flowchart position → Iterate through flowchart until leaf node
 
-All prompts, responses, and reasoning saved for every step.
+CRITICAL FIXES:
+- Stage 3 chooses from flowchart FIRST STEPS (e.g., "Suspected Pneumonia") not categories
+- Flowchart first steps include signs/symptoms/risks for proper LLM decision making
+- Stage 4 properly iterates through flowchart until leaf node or max steps
+- Single prompts_and_responses array (no redundant reasoning_trace)
 """
 
 from typing import Dict, List, Optional, Tuple
@@ -16,10 +20,10 @@ import json
 
 # Import flowchart utilities (these need to exist in the main codebase)
 try:
-    from medeval.flowchart_utils import (
+    from medeval.utils import (
         load_flowchart_content, get_flowchart_knowledge, 
         get_flowchart_structure, get_flowchart_children, 
-        is_leaf_diagnosis
+        is_leaf_diagnosis, get_flowchart_first_step
     )
 except ImportError:
     # Fallback implementations if utilities don't exist
@@ -37,12 +41,15 @@ except ImportError:
     
     def is_leaf_diagnosis(structure: Dict, node: str) -> bool:
         return False
+    
+    def get_flowchart_first_step(data: Dict) -> str:
+        return "Suspected Mock Disease"
 
 
 class CleanProgressiveReasoning:
     """
-    Clean implementation of progressive clinical reasoning.
-    Follows user's exact specifications step by step.
+    Clean implementation of progressive clinical reasoning - FIXED VERSION.
+    Follows user's exact specifications step by step with critical fixes.
     """
     
     def __init__(self, evaluator):
@@ -55,7 +62,7 @@ class CleanProgressiveReasoning:
     def run_progressive_workflow(self, sample: Dict, num_candidates: int = 3, 
                                max_reasoning_steps: int = 5) -> Dict:
         """
-        Main entry point for clean progressive reasoning workflow.
+        Main entry point for FIXED clean progressive reasoning workflow.
         
         Args:
             sample: Clinical sample data
@@ -63,60 +70,59 @@ class CleanProgressiveReasoning:
             max_reasoning_steps: Max steps after step 1
             
         Returns:
-            Complete results with all prompts/responses saved
+            Complete results with all prompts/responses saved (NO REDUNDANCY)
         """
         
-        # Track ALL steps with prompts and responses
-        all_steps = []
+        # Track ALL steps with prompts and responses - SINGLE SOURCE OF TRUTH
+        prompts_and_responses = []
         
         try:
             # STEP 0: History → Choose k candidate diagnoses
             print(f"🔍 Step 0: Analyzing history to choose {num_candidates} candidates...")
             step0_result = self._step0_choose_candidates(sample, num_candidates)
-            all_steps.append(step0_result)
+            prompts_and_responses.append(step0_result)
             
             if not step0_result.get('chosen_candidates'):
-                return self._create_failure_result("Step 0 failed: No candidates chosen", all_steps)
+                return self._create_failure_result("Step 0 failed: No candidates chosen", prompts_and_responses)
             
-            # STEP 1: Exams/results + flowcharts → Choose starting diagnosis
+            # STEP 1: Exams/results + flowcharts → Choose starting diagnosis FROM FLOWCHART FIRST STEPS
             print("🔍 Step 1: Analyzing complete clinical data with flowcharts...")
-            step1_result = self._step1_choose_starting_diagnosis(sample, step0_result['chosen_candidates'])
-            all_steps.append(step1_result)
+            step1_result = self._step1_choose_flowchart_first_step(sample, step0_result['chosen_candidates'])
+            prompts_and_responses.append(step1_result)
             
-            if not step1_result.get('starting_diagnosis'):
-                return self._create_failure_result("Step 1 failed: No starting diagnosis", all_steps)
+            if not step1_result.get('chosen_first_step'):
+                return self._create_failure_result("Step 1 failed: No first step chosen", prompts_and_responses)
             
             # STEP 2-n: Flowchart-guided reasoning to final diagnosis
             print(f"🔍 Steps 2-{max_reasoning_steps + 1}: Following flowchart to final diagnosis...")
-            flowchart_steps = self._steps2_n_flowchart_reasoning(
+            flowchart_steps = self._steps2_n_flowchart_iteration(
                 sample, 
-                step1_result['starting_diagnosis'],
+                step1_result['chosen_first_step'],
                 step1_result['flowchart_category'], 
                 max_reasoning_steps
             )
-            all_steps.extend(flowchart_steps['steps'])
+            prompts_and_responses.extend(flowchart_steps)
             
-            # Determine final diagnosis
-            final_diagnosis = flowchart_steps.get('final_diagnosis') or step1_result['starting_diagnosis']
+            # Determine final diagnosis from last step
+            final_diagnosis = prompts_and_responses[-1].get('current_diagnosis', step1_result['chosen_first_step'])
             matched_diagnosis = self.evaluator.find_best_match(final_diagnosis)
             
-            print(f"✅ Workflow complete: {len(all_steps)} steps, final diagnosis: {matched_diagnosis}")
+            print(f"✅ Workflow complete: {len(prompts_and_responses)} steps, final diagnosis: {matched_diagnosis}")
             
             return {
                 'final_diagnosis': matched_diagnosis,
-                'reasoning_trace': all_steps,
-                'reasoning_steps': len(all_steps),
+                'reasoning_steps': len(prompts_and_responses),
                 'suspicions': step0_result['chosen_candidates'],
                 'recommended_tests': step1_result.get('flowcharts_requested', ''),
-                'chosen_suspicion': step1_result['starting_diagnosis'],
+                'chosen_suspicion': step1_result['chosen_first_step'],  # FIXED: First step not category
                 'reasoning_successful': bool(matched_diagnosis),
-                'prompts_and_responses': all_steps,  # Complete audit trail
-                'mode': 'clean_step_by_step'
+                'prompts_and_responses': prompts_and_responses,  # SINGLE SOURCE OF TRUTH
+                'mode': 'clean_step_by_step_fixed'
             }
             
         except Exception as e:
             print(f"❌ Error in progressive workflow: {e}")
-            return self._create_failure_result(f"Workflow error: {e}", all_steps)
+            return self._create_failure_result(f"Workflow error: {e}", prompts_and_responses)
     
     def _step0_choose_candidates(self, sample: Dict, num_candidates: int) -> Dict:
         """
@@ -137,6 +143,7 @@ class CleanProgressiveReasoning:
         
         return {
             'step': 0,
+            'stage': 'step0_candidate_selection',
             'action': 'choose_candidates',
             'prompt': prompt,
             'response': response,
@@ -145,47 +152,48 @@ class CleanProgressiveReasoning:
             'reasoning': self._extract_step0_reasoning(response)
         }
     
-    def _step1_choose_starting_diagnosis(self, sample: Dict, candidates: List[str]) -> Dict:
+    def _step1_choose_flowchart_first_step(self, sample: Dict, candidates: List[str]) -> Dict:
         """
-        Step 1: Exams/results (inputs 5-6) + k flowcharts → Choose starting diagnosis
+        FIXED Step 1: Exams/results (inputs 5-6) + k flowcharts → Choose starting diagnosis FROM FLOWCHART FIRST STEPS
         """
         
         # Get complete clinical information (all 6 inputs)
         full_summary = self.evaluator.create_patient_data_summary(sample, 6)
         
-        # Load flowcharts for candidates
-        flowchart_info, loaded_flowcharts = self._load_flowcharts_info(candidates)
+        # Load flowcharts for candidates and extract FIRST STEPS with signs/symptoms
+        flowchart_first_steps_info, loaded_flowcharts = self._load_flowchart_first_steps_info(candidates)
         
-        # Create Step 1 prompt
-        prompt = self._create_step1_prompt(full_summary, candidates, flowchart_info)
+        # Create Step 1 prompt with FIRST STEPS and their signs/symptoms/risks
+        prompt = self._create_step1_flowchart_first_steps_prompt(full_summary, candidates, flowchart_first_steps_info)
         
         # Query LLM
         response = self.evaluator.query_llm(prompt, max_tokens=1000)
         
-        # Parse starting diagnosis and flowchart
-        starting_diagnosis, flowchart_category = self._parse_step1_choice(
-            response, candidates, loaded_flowcharts
+        # Parse chosen FIRST STEP and flowchart
+        chosen_first_step, flowchart_category = self._parse_step1_first_step_choice(
+            response, flowchart_first_steps_info, loaded_flowcharts
         )
         
         return {
             'step': 1,
-            'action': 'choose_starting_diagnosis',
+            'stage': 'step1_flowchart_first_step_selection',
+            'action': 'choose_flowchart_first_step',
             'prompt': prompt,
             'response': response,
-            'starting_diagnosis': starting_diagnosis,
-            'flowchart_category': flowchart_category,
+            'chosen_first_step': chosen_first_step,  # e.g., "Suspected Pneumonia"
+            'flowchart_category': flowchart_category,  # e.g., "Pneumonia"
             'flowcharts_requested': f"Flowcharts for: {', '.join(candidates)}",
             'reasoning': self._extract_step1_reasoning(response)
         }
     
-    def _steps2_n_flowchart_reasoning(self, sample: Dict, starting_diagnosis: str, 
-                                     flowchart_category: str, max_steps: int) -> Dict:
+    def _steps2_n_flowchart_iteration(self, sample: Dict, starting_first_step: str, 
+                                     flowchart_category: str, max_steps: int) -> List[Dict]:
         """
-        Steps 2-n: Patient info + flowchart position → Reason to next step until leaf node
+        FIXED Steps 2-n: Patient info + flowchart position → Iterate step by step until leaf node
         """
         
         steps = []
-        current_diagnosis = starting_diagnosis
+        current_node = starting_first_step  # Start from chosen first step
         step_number = 2
         
         # Get complete clinical information
@@ -197,186 +205,145 @@ class CleanProgressiveReasoning:
             flowchart_structure = get_flowchart_structure(flowchart_data)
             flowchart_knowledge = get_flowchart_knowledge(flowchart_data)
         except Exception as e:
-            return {
-                'steps': [{
-                    'step': 2,
-                    'action': 'flowchart_unavailable',
-                    'response': f'Flowchart for {flowchart_category} unavailable: {e}',
-                    'current_diagnosis': starting_diagnosis,
-                    'final_diagnosis': True
-                }],
-                'final_diagnosis': starting_diagnosis
-            }
+            print(f"Warning: Could not load flowchart for {flowchart_category}: {e}")
+            return [{
+                'step': 2,
+                'stage': 'step2_flowchart_unavailable',
+                'action': 'flowchart_unavailable',
+                'response': f"Flowchart for {flowchart_category} unavailable",
+                'current_diagnosis': starting_first_step
+            }]
         
-        # Continue reasoning until leaf node or max steps
-        while step_number <= max_steps + 1:  # +1 because we start at step 2
+        # Iterate through flowchart until leaf node or max steps
+        while step_number <= max_steps + 1:
+            print(f"   📍 Step {step_number}: Current node: {current_node}")
             
-            # Check if current diagnosis is a leaf node (final diagnosis)
-            if is_leaf_diagnosis(flowchart_structure, current_diagnosis):
-                steps.append({
-                    'step': step_number,
-                    'action': 'reached_leaf_node',
-                    'current_diagnosis': current_diagnosis,
-                    'final_diagnosis': True,
-                    'response': f'Reached final diagnosis: {current_diagnosis}'
-                })
+            # Check if we've reached a leaf diagnosis
+            if is_leaf_diagnosis(flowchart_structure, current_node):
+                print(f"   🎯 Reached leaf diagnosis: {current_node}")
                 break
             
-            # Get next possible diagnoses from flowchart
-            next_options = get_flowchart_children(flowchart_structure, current_diagnosis)
+            # Get next possible steps in flowchart
+            next_options = get_flowchart_children(flowchart_structure, current_node)
             
             if not next_options:
-                steps.append({
-                    'step': step_number,
-                    'action': 'no_more_options',
-                    'current_diagnosis': current_diagnosis,
-                    'final_diagnosis': True,
-                    'response': f'No further options. Final: {current_diagnosis}'
-                })
+                print(f"   🏁 No further options from: {current_node}")
                 break
             
-            if len(next_options) == 1:
-                # Only one option, proceed automatically
-                next_diagnosis = next_options[0]
-                steps.append({
-                    'step': step_number,
-                    'action': 'single_option',
-                    'current_diagnosis': current_diagnosis,
-                    'next_diagnosis': next_diagnosis,
-                    'response': f'Single path: {current_diagnosis} → {next_diagnosis}'
-                })
-                current_diagnosis = next_diagnosis
-                step_number += 1
-                continue
-            
-            # Multiple options - need LLM reasoning
+            # Reason through flowchart step
             step_result = self._reason_flowchart_step(
-                sample, current_diagnosis, next_options, step_number,
+                sample, current_node, next_options, step_number,
                 full_summary, flowchart_knowledge
             )
             steps.append(step_result)
             
-            # Move to chosen diagnosis
-            current_diagnosis = step_result['chosen_diagnosis']
+            # Move to chosen next step
+            current_node = step_result.get('chosen_diagnosis', current_node)
             step_number += 1
         
-        return {
-            'steps': steps,
-            'final_diagnosis': current_diagnosis
-        }
+        return steps
     
-    def _reason_flowchart_step(self, sample: Dict, current_diagnosis: str,
+    def _reason_flowchart_step(self, sample: Dict, current_node: str,
                               next_options: List[str], step_number: int,
                               full_summary: str, flowchart_knowledge: Dict) -> Dict:
         """
-        Reason through a flowchart step with multiple options
+        Reason through a single flowchart step with evidence matching
         """
         
-        # Create prompt for this reasoning step
         prompt = self._create_flowchart_step_prompt(
-            full_summary, current_diagnosis, next_options, step_number, flowchart_knowledge
+            full_summary, current_node, next_options, step_number, flowchart_knowledge
         )
         
-        # Query LLM
-        response = self.evaluator.query_llm(prompt, max_tokens=1000)
+        response = self.evaluator.query_llm(prompt, max_tokens=800)
         
-        # Parse chosen diagnosis
         chosen_diagnosis = self._parse_flowchart_step_choice(response, next_options)
         
         return {
             'step': step_number,
-            'action': 'flowchart_reasoning',
+            'stage': f'step{step_number}_flowchart_reasoning',
+            'action': 'flowchart_step_reasoning',
             'prompt': prompt,
             'response': response,
-            'current_diagnosis': current_diagnosis,
+            'current_node': current_node,
             'next_options': next_options,
             'chosen_diagnosis': chosen_diagnosis,
+            'current_diagnosis': chosen_diagnosis,  # For final diagnosis extraction
             'reasoning': self._extract_flowchart_reasoning(response)
         }
     
     # === PROMPT CREATION METHODS ===
     
     def _create_step0_prompt(self, history_summary: str, num_candidates: int) -> str:
-        """Create Step 0 prompt for choosing candidates from history"""
+        """Create Step 0 prompt for choosing candidates based on history only"""
         
-        prompt = f"""You are a medical expert analyzing patient history to identify the most likely diagnostic categories.
+        prompt = f"""You are a medical expert analyzing patient history to identify initial diagnostic candidates.
 
 **Patient History (Initial Information Only):**
 {history_summary}
 
-**Available Diagnostic Categories:**"""
-        
-        for i, category in enumerate(self.flowchart_categories, 1):
-            prompt += f"\n{i}. {category}"
-        
-        prompt += f"""
+**Available Disease Categories:**
+{chr(10).join(f'{i+1}. {cat}' for i, cat in enumerate(self.flowchart_categories))}
 
-**Task:** Based ONLY on the patient history above, identify the {num_candidates} most likely diagnostic categories.
+**Task:** Based on the patient history above, select the {num_candidates} most likely disease categories.
 
 **Instructions:**
-• Choose {num_candidates} categories from the available list above
-• Rank them in order of likelihood based on historical findings
-• For each choice, provide detailed reasoning based on specific historical patterns
-• For rejected obvious alternatives, explain why they are less likely
-• Use medical knowledge to match historical presentations with diagnostic categories
+• Focus only on the patient history provided (no additional test results yet)
+• Choose categories that best match the presenting symptoms and history
+• Provide reasoning for each choice based on historical clinical findings
+• Rank them in order of likelihood
 
 **Format:**
-**REASONING FOR EACH CANDIDATE:**
-1. [Category name] - [Detailed reasoning based on history]
-2. [Category name] - [Detailed reasoning based on history]
-3. [Category name] - [Detailed reasoning based on history]
-
-**REJECTED ALTERNATIVES:**
-- [Category name]: [Why rejected based on history]
-- [Category name]: [Why rejected based on history]
+**CLINICAL REASONING:**
+[Systematic analysis of history against potential categories]
 
 **FINAL CANDIDATES:**
-1. [Category name]
-2. [Category name]
-3. [Category name]"""
+1. [Most likely category with brief justification]
+2. [Second most likely category with brief justification]
+3. [Third most likely category with brief justification]
+
+**DETAILED REASONING:** [Complete explanation of choice rationale]"""
         
         return prompt
     
-    def _create_step1_prompt(self, full_summary: str, candidates: List[str], 
-                            flowchart_info: str) -> str:
-        """Create Step 1 prompt for choosing starting diagnosis with flowcharts"""
+    def _create_step1_flowchart_first_steps_prompt(self, full_summary: str, candidates: List[str], 
+                                                  flowchart_first_steps_info: str) -> str:
+        """FIXED: Create Step 1 prompt for choosing from flowchart FIRST STEPS with signs/symptoms"""
         
         prompt = f"""You are a medical expert with complete clinical information and diagnostic flowcharts.
 
 **Complete Patient Clinical Information:**
 {full_summary}
 
-**Available Diagnostic Flowcharts:**
-{flowchart_info}
+**Available Flowchart Starting Points with Clinical Criteria:**
+{flowchart_first_steps_info}
 
 **Previously Identified Candidates (Step 0):**
 {', '.join(f'{i+1}. {cand}' for i, cand in enumerate(candidates))}
 
-**Task:** With complete clinical information and flowcharts, choose the best starting diagnosis.
+**Task:** Choose the best flowchart starting point based on clinical findings matching the criteria.
+
+**CRITICAL:** You must choose from the "STARTING POINTS" listed above, NOT the general categories.
+For example, choose "Suspected Pneumonia" rather than "Pneumonia".
 
 **Instructions:**
-• Compare complete clinical findings against each flowchart's criteria
-• Choose the flowchart and starting diagnosis that best matches the patient
-• Provide detailed reasoning comparing findings to flowchart requirements
-• Explain why chosen option is superior to other candidates
-• Identify the specific starting point in the chosen flowchart
+• Compare patient's clinical findings against each starting point's signs/symptoms/risks
+• Choose the flowchart starting point where clinical findings best match the criteria
+• Provide detailed evidence matching for your choice
+• Explain why chosen starting point is superior to other options
 
 **Format:**
 **CLINICAL EVIDENCE ANALYSIS:**
-[Systematic analysis of patient findings against each flowchart]
+[Systematic comparison of patient findings against each starting point's criteria]
 
 **COMPARATIVE REASONING:**
-- {candidates[0]}: [How clinical findings match/don't match]
-- {candidates[1] if len(candidates) > 1 else 'N/A'}: [How clinical findings match/don't match]
-- {candidates[2] if len(candidates) > 2 else 'N/A'}: [How clinical findings match/don't match]
+[Compare how well patient matches each starting point's signs/symptoms/risks]
 
-**CHOSEN FLOWCHART:** [Best matching flowchart]
-**STARTING DIAGNOSIS:** [Specific starting point in flowchart]
-**DETAILED REASONING:** [Complete justification]"""
+**CHOSEN STARTING POINT:** [Exact starting point name from the list above]
+**DETAILED REASONING:** [Complete medical justification with evidence matching]"""
         
         return prompt
     
-    def _create_flowchart_step_prompt(self, full_summary: str, current_diagnosis: str,
+    def _create_flowchart_step_prompt(self, full_summary: str, current_node: str,
                                      next_options: List[str], step_number: int,
                                      flowchart_knowledge: Dict) -> str:
         """Create prompt for reasoning through flowchart step"""
@@ -386,9 +353,9 @@ class CleanProgressiveReasoning:
 **Complete Patient Clinical Information:**
 {full_summary}
 
-**Current Position in Flowchart:** {current_diagnosis}
+**Current Position in Flowchart:** {current_node}
 
-**Next Possible Diagnoses:**"""
+**Next Possible Steps:**"""
         
         for i, option in enumerate(next_options, 1):
             prompt += f"\n{i}. {option}"
@@ -406,14 +373,14 @@ class CleanProgressiveReasoning:
         
         prompt += f"""
 
-**Task:** Choose the most appropriate next diagnosis based on patient's clinical findings.
+**Task:** Choose the most appropriate next step based on patient's clinical findings.
 
 **Instructions:**
 • Compare patient's findings against each option's typical presentation
 • Use medical knowledge to guide reasoning
 • Provide detailed evidence matching for each option
 • Explain why chosen option best fits the clinical picture
-• Explain why other options are less likely
+• Continue following the flowchart logic systematically
 
 **Format:**
 **EVIDENCE MATCHING:**
@@ -424,7 +391,7 @@ class CleanProgressiveReasoning:
 **COMPARATIVE ANALYSIS:**
 [Why chosen option is superior to alternatives]
 
-**CHOSEN DIAGNOSIS:** [Number] - [Diagnosis name]
+**CHOSEN STEP:** [Number] - [Step name]
 **REASONING:** [Complete medical justification]"""
         
         return prompt
@@ -441,19 +408,18 @@ class CleanProgressiveReasoning:
         if final_match:
             lines = final_match.group(1).strip().split('\n')
             for line in lines:
-                match = re.match(r'^\d+\.\s*(.+)', line.strip())
-                if match:
-                    candidate = match.group(1).strip()
-                    if candidate and candidate not in candidates:
-                        candidates.append(candidate)
+                # Look for category names in the line - extract clean names
+                clean_candidate = self._extract_clean_category_name(line)
+                if clean_candidate and clean_candidate not in candidates:
+                    candidates.append(clean_candidate)
         
-        # Fallback: numbered lists
+        # Fallback: numbered lists anywhere in response
         if len(candidates) < num_candidates:
-            all_matches = re.findall(r'^\d+\.\s*([A-Za-z][A-Za-z\s]+)', response, re.MULTILINE)
+            all_matches = re.findall(r'^\d+\.\s*(.+)', response, re.MULTILINE)
             for match in all_matches:
-                clean_match = match.strip()
-                if clean_match and clean_match not in candidates and len(clean_match) > 3:
-                    candidates.append(clean_match)
+                clean_candidate = self._extract_clean_category_name(match)
+                if clean_candidate and clean_candidate not in candidates:
+                    candidates.append(clean_candidate)
                     if len(candidates) >= num_candidates:
                         break
         
@@ -463,40 +429,106 @@ class CleanProgressiveReasoning:
         
         return candidates[:num_candidates]
     
-    def _parse_step1_choice(self, response: str, candidates: List[str],
-                           loaded_flowcharts: Dict) -> Tuple[str, str]:
-        """Parse starting diagnosis choice from Step 1 response"""
+    def _extract_clean_category_name(self, text: str) -> str:
+        """Extract clean category name from LLM response text"""
         
-        # Extract flowchart and starting diagnosis
-        flowchart_match = re.search(r'CHOSEN FLOWCHART:\s*(.+?)(?=\n|\Z)', response, re.IGNORECASE)
-        diagnosis_match = re.search(r'STARTING DIAGNOSIS:\s*(.+?)(?=\n|\Z)', response, re.IGNORECASE)
+        # Remove markdown formatting
+        clean_text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+        clean_text = clean_text.strip()
         
-        chosen_flowchart = None
-        starting_diagnosis = None
+        # Common patterns to extract category names
+        patterns = [
+            r'(\d+\.\s*)?([A-Za-z][A-Za-z\s]+?)(?:\s*-|\s*\(|\Z)',  # Extract before dash or parenthesis
+            r'([A-Za-z][A-Za-z\s]+?)(?:\s*-)',  # Extract before dash
+            r'([A-Za-z][A-Za-z\s]+?)(?:\s*\()',  # Extract before parenthesis
+            r'([A-Za-z][A-Za-z\s]+?)(?:\s*:)',  # Extract before colon
+        ]
         
-        if flowchart_match:
-            flowchart_text = flowchart_match.group(1).strip()
-            for candidate in candidates:
-                if candidate.lower() in flowchart_text.lower():
-                    chosen_flowchart = candidate
-                    break
+        for pattern in patterns:
+            match = re.search(pattern, clean_text)
+            if match:
+                candidate = match.group(1) if match.group(1) and not match.group(1).strip().endswith('.') else match.group(2)
+                candidate = candidate.strip()
+                
+                # Map common variations to actual flowchart categories
+                category_mapping = {
+                    'Acute Coronary Syndrome': 'Acute Coronary Syndrome',
+                    'ACS': 'Acute Coronary Syndrome',
+                    'Aortic Dissection': 'Aortic Dissection', 
+                    'Pulmonary Embolism': 'Pulmonary Embolism',
+                    'PE': 'Pulmonary Embolism',
+                    'Heart Failure': 'Heart Failure',
+                    'Pneumonia': 'Pneumonia',
+                    'COPD': 'COPD',
+                    'Asthma': 'Asthma'
+                }
+                
+                # Try exact match first
+                if candidate in category_mapping:
+                    return category_mapping[candidate]
+                
+                # Try partial matching
+                for key, value in category_mapping.items():
+                    if key.lower() in candidate.lower():
+                        return value
+                
+                # Check if it matches any of our available categories
+                for category in self.flowchart_categories:
+                    if category.lower() in candidate.lower() or candidate.lower() in category.lower():
+                        return category
+                
+                # Return cleaned candidate if no mapping found
+                if len(candidate) > 3:
+                    return candidate
         
-        if diagnosis_match:
-            starting_diagnosis = diagnosis_match.group(1).strip()
+        return ""
+    
+    def _parse_step1_first_step_choice(self, response: str, flowchart_first_steps_info: str,
+                                      loaded_flowcharts: Dict) -> Tuple[str, str]:
+        """FIXED: Parse chosen FIRST STEP from Step 1 response"""
+        
+        # Extract chosen starting point
+        starting_point_match = re.search(r'CHOSEN STARTING POINT:\s*(.+?)(?=\n|\Z)', response, re.IGNORECASE)
+        
+        chosen_first_step = None
+        flowchart_category = None
+        
+        if starting_point_match:
+            chosen_text = starting_point_match.group(1).strip()
+            
+            # Find matching first step from loaded flowcharts
+            for category, flowchart_data in loaded_flowcharts.items():
+                try:
+                    first_step = get_flowchart_first_step(flowchart_data)
+                    if first_step.lower() in chosen_text.lower() or chosen_text.lower() in first_step.lower():
+                        chosen_first_step = first_step
+                        flowchart_category = category
+                        break
+                except:
+                    continue
         
         # Fallbacks
-        if not chosen_flowchart:
-            chosen_flowchart = candidates[0]
-        if not starting_diagnosis:
-            starting_diagnosis = chosen_flowchart
+        if not chosen_first_step:
+            # Use first available flowchart's first step
+            for category, flowchart_data in loaded_flowcharts.items():
+                try:
+                    chosen_first_step = get_flowchart_first_step(flowchart_data)
+                    flowchart_category = category
+                    break
+                except:
+                    continue
         
-        return starting_diagnosis, chosen_flowchart
+        if not chosen_first_step:
+            chosen_first_step = "Suspected Unknown Condition"
+            flowchart_category = "Unknown"
+        
+        return chosen_first_step, flowchart_category
     
     def _parse_flowchart_step_choice(self, response: str, options: List[str]) -> str:
-        """Parse chosen diagnosis from flowchart step response"""
+        """Parse chosen step from flowchart step response"""
         
-        # Extract from CHOSEN DIAGNOSIS section
-        chosen_match = re.search(r'CHOSEN DIAGNOSIS:\s*(\d+)\s*-\s*(.+?)(?=\n|\Z)', 
+        # Extract from CHOSEN STEP section
+        chosen_match = re.search(r'CHOSEN STEP:\s*(\d+)\s*-\s*(.+?)(?=\n|\Z)', 
                                response, re.IGNORECASE)
         
         if chosen_match:
@@ -540,19 +572,24 @@ class CleanProgressiveReasoning:
         
         return summary.strip()
     
-    def _load_flowcharts_info(self, candidates: List[str]) -> Tuple[str, Dict]:
-        """Load flowchart information for candidates"""
+    def _load_flowchart_first_steps_info(self, candidates: List[str]) -> Tuple[str, Dict]:
+        """FIXED: Load flowchart FIRST STEPS with their signs/symptoms/risks for Stage 3 decision"""
         
-        flowchart_info = ""
+        flowchart_info = "**FLOWCHART STARTING POINTS:**\n\n"
         loaded_flowcharts = {}
         
         for candidate in candidates:
             try:
                 flowchart_data = load_flowchart_content(candidate, self.flowchart_dir)
-                flowchart_knowledge = get_flowchart_knowledge(flowchart_data)
                 loaded_flowcharts[candidate] = flowchart_data
                 
-                flowchart_info += f"\n**{candidate} Flowchart:**\n"
+                # Get first step and its clinical criteria
+                first_step = get_flowchart_first_step(flowchart_data)
+                flowchart_knowledge = get_flowchart_knowledge(flowchart_data)
+                
+                flowchart_info += f"**{first_step}** (from {candidate} flowchart):\n"
+                
+                # Add signs, symptoms, risks, etc. for this first step
                 if flowchart_knowledge:
                     for key, value in flowchart_knowledge.items():
                         if isinstance(value, dict):
@@ -562,69 +599,64 @@ class CleanProgressiveReasoning:
                         else:
                             flowchart_info += f"• {key}: {value}\n"
                 
+                flowchart_info += "\n"
+                
             except Exception as e:
-                flowchart_info += f"\n**{candidate} Flowchart:** [Could not load: {e}]\n"
+                print(f"Warning: Could not load flowchart for {candidate}: {e}")
+                flowchart_info += f"**Suspected {candidate}** (flowchart unavailable):\n"
+                flowchart_info += f"• General {candidate} clinical presentation\n\n"
+                loaded_flowcharts[candidate] = {}
         
-        return flowchart_info, loaded_flowcharts
+        return flowchart_info.strip(), loaded_flowcharts
     
     def _extract_step0_reasoning(self, response: str) -> str:
         """Extract reasoning from Step 0 response"""
-        reasoning_match = re.search(r'REASONING FOR EACH CANDIDATE:\s*(.*?)(?=\n\*\*REJECTED|\n\*\*FINAL|\Z)', 
-                                  response, re.DOTALL | re.IGNORECASE)
-        if reasoning_match:
-            return reasoning_match.group(1).strip()
-        return response[:200] + "..." if len(response) > 200 else response
+        match = re.search(r'DETAILED REASONING:\s*(.+?)(?=\n\n|\Z)', response, re.DOTALL | re.IGNORECASE)
+        return match.group(1).strip() if match else response.strip()
     
     def _extract_step1_reasoning(self, response: str) -> str:
         """Extract reasoning from Step 1 response"""
-        reasoning_match = re.search(r'DETAILED REASONING:\s*(.*?)(?=\n\*\*|\Z)', 
-                                  response, re.DOTALL | re.IGNORECASE)
-        if reasoning_match:
-            return reasoning_match.group(1).strip()
-        return response[:200] + "..." if len(response) > 200 else response
+        match = re.search(r'DETAILED REASONING:\s*(.+?)(?=\n\n|\Z)', response, re.DOTALL | re.IGNORECASE)
+        return match.group(1).strip() if match else response.strip()
     
     def _extract_flowchart_reasoning(self, response: str) -> str:
         """Extract reasoning from flowchart step response"""
-        reasoning_match = re.search(r'REASONING:\s*(.*?)(?=\n\*\*|\Z)', 
-                                  response, re.DOTALL | re.IGNORECASE)
-        if reasoning_match:
-            return reasoning_match.group(1).strip()
-        return response[:200] + "..." if len(response) > 200 else response
+        match = re.search(r'REASONING:\s*(.+?)(?=\n\n|\Z)', response, re.DOTALL | re.IGNORECASE)
+        return match.group(1).strip() if match else response.strip()
     
     def _create_failure_result(self, error_message: str, steps: List[Dict]) -> Dict:
-        """Create failure result when workflow fails"""
+        """Create failure result with error message"""
         return {
-            'final_diagnosis': None,
-            'reasoning_trace': steps,
+            'final_diagnosis': 'Error',
             'reasoning_steps': len(steps),
             'suspicions': [],
             'recommended_tests': '',
-            'chosen_suspicion': None,
+            'chosen_suspicion': error_message,
             'reasoning_successful': False,
             'prompts_and_responses': steps,
-            'mode': 'clean_step_by_step',
-            'error': error_message
+            'mode': 'clean_step_by_step_fixed_error'
         }
 
 
-# Integration function for main evaluator
 def integrate_clean_progressive_reasoning(evaluator):
     """
-    Replace the existing progressive reasoning workflow with the clean implementation
+    Integration function to replace existing progressive reasoning workflow
     """
     
-    # Create clean reasoning instance
+    # Create the clean progressive reasoning instance
     clean_reasoning = CleanProgressiveReasoning(evaluator)
     
-    # Replace the existing method with proper signature
+    # Replace the progressive reasoning method
     def new_progressive_reasoning_workflow(self, sample: Dict, num_suspicions: int = 3,
                                          max_reasoning_steps: int = 5, fast_mode: bool = False) -> Dict:
-        """Clean progressive reasoning workflow - ignores fast_mode, always uses step-by-step"""
-        return clean_reasoning.run_progressive_workflow(sample, num_suspicions, max_reasoning_steps)
+        """Wrapper to use clean progressive reasoning"""
+        return clean_reasoning.run_progressive_workflow(
+            sample, num_suspicions, max_reasoning_steps
+        )
     
-    # Replace the method properly
+    # Bind the new method to the evaluator
     import types
     evaluator.progressive_reasoning_workflow = types.MethodType(new_progressive_reasoning_workflow, evaluator)
     
-    print("✅ Clean progressive reasoning system integrated!")
+    print("✅ Clean progressive reasoning (FIXED) integrated successfully!")
     return evaluator 

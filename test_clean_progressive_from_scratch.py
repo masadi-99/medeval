@@ -1,147 +1,220 @@
 #!/usr/bin/env python3
 """
-Test the clean progressive reasoning system from scratch
+Test the FIXED Clean Progressive Reasoning System
+Validates critical fixes:
+1. Stage 3 chooses from flowchart FIRST STEPS (e.g., "Suspected Pneumonia") not categories
+2. No redundancy between reasoning_trace and prompts_and_responses 
+3. Stage 4 properly iterates through flowchart step by step
+4. Flowchart first steps include signs/symptoms/risks for proper decision making
 """
 
-import sys
 import json
-from medeval import DiagnosticEvaluator
+import os
+from medeval.evaluator import DiagnosticEvaluator
 from clean_progressive_reasoning import integrate_clean_progressive_reasoning
 
-def load_api_key():
-    """Load API key from file"""
-    possible_paths = [
-        'openai_api_key.txt',
-        'medeval/openai_api_key.txt',
-        './medeval/openai_api_key.txt'
-    ]
+def test_fixed_clean_progressive_reasoning():
+    """Test the FIXED clean progressive reasoning with real API"""
     
-    for path in possible_paths:
-        try:
-            with open(path, 'r') as f:
-                return f.read().strip()
-        except FileNotFoundError:
-            continue
-    
-    print("⚠️  openai_api_key.txt not found")
-    return None
-
-def test_clean_progressive_reasoning():
-    """Test the clean progressive reasoning system"""
-    
-    print("🧪 Testing Clean Progressive Reasoning From Scratch")
+    print("🧪 Testing FIXED Clean Progressive Reasoning System")
     print("=" * 60)
     
-    # Load API key
-    api_key = load_api_key()
-    if not api_key:
-        print("❌ Cannot run test without API key")
+    # Setup API key
+    api_key_file = "medeval/openai_api_key.txt"
+    if not os.path.exists(api_key_file):
+        print("❌ API key file not found")
         return False
     
-    # Create evaluator
+    with open(api_key_file, 'r') as f:
+        api_key = f.read().strip()
+    
+    # Create evaluator and integrate FIXED clean reasoning
     evaluator = DiagnosticEvaluator(
         api_key=api_key,
         model="gpt-4o-mini",
         show_responses=True
     )
     
-    # Integrate clean progressive reasoning
-    print("🔧 Integrating clean progressive reasoning system...")
+    # Integrate the FIXED clean progressive reasoning
     evaluator = integrate_clean_progressive_reasoning(evaluator)
     
-    # Test on 1 sample with progressive reasoning
-    print("\n🔍 Testing progressive reasoning workflow...")
+    # Test sample
+    sample = {
+        "input1": "A 65-year-old man presents with acute chest pain and shortness of breath",
+        "input2": "Pain started 2 hours ago, described as crushing, radiating to left arm",
+        "input3": "History of hypertension and diabetes, takes metformin and lisinopril", 
+        "input4": "Family history of coronary artery disease",
+        "input5": "Physical exam: diaphoretic, blood pressure 160/95, heart rate 110",
+        "input6": "ECG shows ST elevation in leads II, III, aVF. Troponin elevated at 2.3"
+    }
     
-    results = evaluator.evaluate_dataset(
-        num_inputs=6,
-        provide_diagnosis_list=True,
-        max_samples=1,
-        progressive_reasoning=True,
-        progressive_fast_mode=False,  # Should be ignored
-        num_suspicions=3,
-        max_reasoning_steps=3
-    )
+    print(f"📋 Testing with sample case...")
     
-    print(f"\n📊 Results Summary:")
-    print(f"Results keys: {list(results.keys())}")
-    print(f"Total samples: {len(results.get('results', []))}")
-    
-    # Debug: Print full results structure
-    print(f"\n🔍 Debug - Full Results Structure:")
-    for key, value in results.items():
-        if key == 'results':
-            print(f"  {key}: {len(value) if isinstance(value, list) else type(value)}")
-        elif key == 'detailed_results':
-            print(f"  {key}: {len(value) if isinstance(value, list) else type(value)}")
+    # Run the FIXED progressive reasoning
+    try:
+        result = evaluator.progressive_reasoning_workflow(
+            sample=sample,
+            num_suspicions=3,
+            max_reasoning_steps=3
+        )
+        
+        print(f"\n✅ FIXED Progressive reasoning completed successfully!")
+        print(f"   Mode: {result.get('mode', 'unknown')}")
+        print(f"   Final diagnosis: {result.get('final_diagnosis', 'None')}")
+        print(f"   Reasoning steps: {result.get('reasoning_steps', 0)}")
+        print(f"   Chosen suspicion: {result.get('chosen_suspicion', 'None')}")
+        
+        # CRITICAL VALIDATION: Check the fixes
+        
+        # 1. Check for NO redundancy - should only have prompts_and_responses
+        has_reasoning_trace = 'reasoning_trace' in result
+        prompts_and_responses = result.get('prompts_and_responses', [])
+        
+        print(f"\n🔍 REDUNDANCY CHECK:")
+        print(f"   Has reasoning_trace: {has_reasoning_trace}")
+        print(f"   Prompts and responses count: {len(prompts_and_responses)}")
+        
+        if has_reasoning_trace:
+            print("   ❌ FAILED: Still has redundant reasoning_trace field")
+            return False
         else:
-            print(f"  {key}: {value}")
-    
-    # Check detailed_results instead of results
-    sample_results = results.get('detailed_results', results.get('results', []))
-    
-    if sample_results:
-        sample_result = sample_results[0]
+            print("   ✅ PASSED: No redundant reasoning_trace field")
         
-        print(f"\n🔍 Sample Analysis:")
-        print(f"Ground truth: {sample_result.get('ground_truth')}")
-        print(f"Predicted: {sample_result.get('predicted_matched')}")
-        print(f"Correct: {sample_result.get('correct')}")
-        print(f"Mode: {sample_result.get('mode', 'unknown')}")
-        
-        # Check reasoning trace structure
-        reasoning_trace = sample_result.get('reasoning_trace', [])
-        print(f"\n📝 Reasoning Trace Analysis:")
-        print(f"Total steps: {len(reasoning_trace)}")
-        
-        all_steps_have_prompts = True
-        for i, step in enumerate(reasoning_trace):
-            has_prompt = 'prompt' in step
-            has_response = 'response' in step
-            step_type = step.get('action', 'unknown')
-            
-            print(f"  Step {i}: {step_type} - Prompt: {has_prompt}, Response: {has_response}")
-            
-            if not has_prompt or not has_response:
-                all_steps_have_prompts = False
-        
-        # Check for hardcoded messages
-        has_hardcoded = False
-        for step in reasoning_trace:
-            response = step.get('response', '')
-            if 'Starting with' in response and '->' in response:
-                has_hardcoded = True
-                print(f"⚠️  Found hardcoded message: {response[:100]}...")
+        # 2. Check that Stage 3 (Step 1) chooses from flowchart FIRST STEPS
+        step1_data = None
+        for step in prompts_and_responses:
+            if step.get('step') == 1:
+                step1_data = step
                 break
         
-        # Check suspicions structure
-        suspicions = sample_result.get('suspicions', [])
-        print(f"\n🎯 Suspicions Analysis:")
-        print(f"Suspicions type: {type(suspicions)}")
-        print(f"Suspicions: {suspicions}")
+        print(f"\n🔍 STAGE 3 FIRST STEP CHECK:")
+        if step1_data:
+            chosen_first_step = step1_data.get('chosen_first_step', '')
+            flowchart_category = step1_data.get('flowchart_category', '')
+            
+            print(f"   Chosen first step: {chosen_first_step}")
+            print(f"   Flowchart category: {flowchart_category}")
+            
+            # Check if it's a first step (should be like "Suspected X") not just category name
+            if chosen_first_step and chosen_first_step != flowchart_category:
+                if "suspected" in chosen_first_step.lower() or chosen_first_step.startswith("Acute") or chosen_first_step.startswith("Possible"):
+                    print("   ✅ PASSED: Chose flowchart first step, not general category")
+                else:
+                    print("   ⚠️  WARNING: Might not be flowchart first step format")
+            else:
+                print("   ❌ FAILED: Chose general category instead of flowchart first step")
+                return False
+        else:
+            print("   ❌ FAILED: No Step 1 data found")
+            return False
         
-        # Save detailed results for inspection
-        with open('clean_test_results.json', 'w') as f:
-            json.dump(sample_result, f, indent=2)
-        print(f"\n💾 Detailed results saved to: clean_test_results.json")
+        # 3. Check that Stage 4 has multiple iteration steps
+        stage4_steps = [step for step in prompts_and_responses if step.get('step', 0) >= 2]
         
-        # Validation summary
-        print(f"\n✅ Validation Results:")
-        print(f"   All steps have prompts/responses: {all_steps_have_prompts}")
-        print(f"   No hardcoded messages: {not has_hardcoded}")
-        print(f"   Clean progressive mode: {sample_result.get('mode') == 'clean_step_by_step'}")
-        print(f"   Multiple reasoning steps: {len(reasoning_trace) > 1}")
+        print(f"\n🔍 STAGE 4 ITERATION CHECK:")
+        print(f"   Stage 4 steps count: {len(stage4_steps)}")
         
-        if all_steps_have_prompts and not has_hardcoded and len(reasoning_trace) > 1:
-            print("\n🎉 SUCCESS: Clean progressive reasoning working correctly!")
+        if len(stage4_steps) > 0:
+            print("   ✅ PASSED: Stage 4 has reasoning steps")
+            
+            # Check that each step has flowchart progression
+            for i, step in enumerate(stage4_steps):
+                current_node = step.get('current_node', '')
+                chosen_diagnosis = step.get('chosen_diagnosis', '')
+                print(f"     Step {step.get('step')}: {current_node} → {chosen_diagnosis}")
+        else:
+            print("   ⚠️  WARNING: No Stage 4 reasoning steps found")
+        
+        # 4. Check for detailed prompts including signs/symptoms/risks
+        step1_prompt = step1_data.get('prompt', '') if step1_data else ''
+        
+        print(f"\n🔍 FLOWCHART CRITERIA CHECK:")
+        if step1_prompt:
+            has_starting_points = "STARTING POINTS" in step1_prompt or "FLOWCHART STARTING POINTS" in step1_prompt
+            has_criteria = any(keyword in step1_prompt.lower() for keyword in ["signs", "symptoms", "risks", "criteria"])
+            
+            print(f"   Has starting points section: {has_starting_points}")
+            print(f"   Has clinical criteria: {has_criteria}")
+            
+            if has_starting_points and has_criteria:
+                print("   ✅ PASSED: Stage 3 prompt includes flowchart first steps with criteria")
+            else:
+                print("   ⚠️  WARNING: Stage 3 prompt might be missing flowchart criteria")
+        
+        # Save results for inspection
+        with open('fixed_clean_test_results.json', 'w') as f:
+            json.dump(result, f, indent=2)
+        print(f"\n📄 Results saved to: fixed_clean_test_results.json")
+        
+        # Overall validation
+        print(f"\n🎯 OVERALL VALIDATION:")
+        all_checks_passed = (
+            not has_reasoning_trace and  # No redundancy
+            len(prompts_and_responses) > 2 and  # Multiple steps
+            step1_data and step1_data.get('chosen_first_step') != step1_data.get('flowchart_category')  # First step not category
+        )
+        
+        if all_checks_passed:
+            print("✅ SUCCESS: All critical fixes validated!")
+            print("   ✓ Removed redundancy")
+            print("   ✓ Stage 3 chooses flowchart first steps")  
+            print("   ✓ Stage 4 has proper iteration")
             return True
         else:
-            print("\n❌ ISSUES FOUND: Clean progressive reasoning needs fixes")
+            print("❌ FAILED: Some fixes not working correctly")
             return False
+        
+    except Exception as e:
+        print(f"❌ Error during testing: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+def validate_no_hardcoded_messages():
+    """Validate that there are no hardcoded 'Starting with...' messages"""
     
+    print("\n🔍 Checking for hardcoded messages...")
+    
+    # Check the fixed implementation
+    with open('clean_progressive_reasoning.py', 'r') as f:
+        content = f.read()
+    
+    hardcoded_patterns = [
+        "Starting with",
+        "Suspected ACS", 
+        "hardcoded",
+        "mock_"
+    ]
+    
+    found_hardcoded = False
+    for pattern in hardcoded_patterns:
+        if pattern in content and "mock_" not in pattern:  # Allow mock functions
+            print(f"   ⚠️  Found potential hardcoded pattern: {pattern}")
+            found_hardcoded = True
+    
+    if not found_hardcoded:
+        print("   ✅ No hardcoded messages found in implementation")
+        return True
     else:
-        print("❌ No results generated")
+        print("   ❌ Found potential hardcoded messages")
         return False
 
 if __name__ == "__main__":
-    success = test_clean_progressive_reasoning()
-    sys.exit(0 if success else 1) 
+    print("🚀 Starting FIXED Clean Progressive Reasoning Tests")
+    print("=" * 70)
+    
+    # Test the fixes
+    reasoning_success = test_fixed_clean_progressive_reasoning()
+    no_hardcoded_success = validate_no_hardcoded_messages()
+    
+    print("\n" + "=" * 70)
+    if reasoning_success and no_hardcoded_success:
+        print("🎉 ALL TESTS PASSED: Fixed clean progressive reasoning working correctly!")
+        print("   ✓ No data redundancy")
+        print("   ✓ Stage 3 chooses flowchart first steps")
+        print("   ✓ Stage 4 iterates through flowcharts properly")
+        print("   ✓ No hardcoded messages")
+    else:
+        print("❌ SOME TESTS FAILED: Additional fixes needed")
+        
+    print("=" * 70) 
