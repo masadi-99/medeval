@@ -332,7 +332,8 @@ Answer:"""
     def evaluate_sample(self, sample_path: str, num_inputs: int, 
                        provide_diagnosis_list: bool, two_step_reasoning: bool = False,
                        num_categories: int = 3, iterative_reasoning: bool = False,
-                       max_reasoning_steps: int = 5) -> Dict:
+                       max_reasoning_steps: int = 5, progressive_reasoning: bool = False,
+                       num_suspicions: int = 3) -> Dict:
         """
         Evaluate a single sample
         
@@ -344,6 +345,8 @@ Answer:"""
             num_categories: Number of categories to select in first step
             iterative_reasoning: Whether to use iterative step-by-step reasoning
             max_reasoning_steps: Maximum number of reasoning steps for iterative mode
+            progressive_reasoning: Whether to use progressive reasoning
+            num_suspicions: Number of suspicions to generate in the first stage
         
         Returns:
             Dict with evaluation results
@@ -352,7 +355,32 @@ Answer:"""
         ground_truth = extract_diagnosis_from_path(sample_path)
         disease_category = extract_disease_category_from_path(sample_path)
         
-        if iterative_reasoning:
+        if progressive_reasoning:
+            # Progressive reasoning: History -> Suspicions -> Tests -> Final diagnosis
+            progressive_result = self.progressive_reasoning_workflow(
+                sample, num_suspicions, max_reasoning_steps
+            )
+            
+            predicted = progressive_result['final_diagnosis']
+            reasoning_trace = progressive_result['reasoning_trace']
+            suspicions_generated = progressive_result['suspicions']
+            recommended_tests = progressive_result['recommended_tests']
+            chosen_suspicion = progressive_result['chosen_suspicion']
+            reasoning_steps = progressive_result['reasoning_steps']
+            
+            if self.show_responses:
+                print(f"Sample: {sample_path}")
+                print(f"Disease Category: {disease_category}")
+                print(f"Progressive Reasoning Workflow:")
+                print(f"  Stage 1 - Initial Suspicions: {suspicions_generated}")
+                print(f"  Stage 2 - Recommended Tests: {recommended_tests[:100]}...")
+                print(f"  Stage 3 - Chosen Suspicion: {chosen_suspicion}")
+                print(f"  Stage 4 - Reasoning Steps: {reasoning_steps}")
+                print(f"Final Diagnosis: '{predicted}'")
+                print(f"Ground Truth: '{ground_truth}'")
+                print()
+        
+        elif iterative_reasoning:
             # Step 1: Category selection (same as two-step)
             category_prompt = self.create_category_selection_prompt(sample, num_inputs, num_categories)
             # Category selection with detailed reasoning needs generous token limit
@@ -472,7 +500,16 @@ Answer:"""
         }
         
         # Add mode-specific information
-        if iterative_reasoning:
+        if progressive_reasoning:
+            result.update({
+                'progressive_reasoning': True,
+                'suspicions_generated': suspicions_generated,
+                'recommended_tests': recommended_tests,
+                'chosen_suspicion': chosen_suspicion,
+                'reasoning_trace': reasoning_trace,
+                'reasoning_steps': reasoning_steps
+            })
+        elif iterative_reasoning:
             result.update({
                 'iterative_reasoning': True,
                 'category_selection_response': category_response,
@@ -552,7 +589,9 @@ Answer:"""
                         two_step_reasoning: bool = False,
                         num_categories: int = 3,
                         iterative_reasoning: bool = False,
-                        max_reasoning_steps: int = 5) -> Dict:
+                        max_reasoning_steps: int = 5,
+                        progressive_reasoning: bool = False,
+                        num_suspicions: int = 3) -> Dict:
         """
         Evaluate the entire dataset
         
@@ -565,6 +604,8 @@ Answer:"""
             num_categories: Number of categories to select in first step
             iterative_reasoning: Whether to use iterative step-by-step reasoning
             max_reasoning_steps: Maximum number of reasoning steps for iterative mode
+            progressive_reasoning: Whether to use progressive reasoning
+            num_suspicions: Number of suspicions to generate in the first stage
         
         Returns:
             Dict with evaluation metrics and results
@@ -583,7 +624,10 @@ Answer:"""
         print(f"Evaluating {len(sample_files)} samples...")
         print(f"Using {num_inputs} input fields")
         print(f"Providing diagnosis list: {provide_diagnosis_list}")
-        if two_step_reasoning:
+        if progressive_reasoning:
+            print(f"Progressive reasoning enabled (generating {num_suspicions} suspicions, max {max_reasoning_steps} steps)")
+            print(f"Workflow: History -> Suspicions -> Tests -> Choice -> Flowcharts")
+        elif two_step_reasoning:
             print(f"Two-step reasoning enabled (selecting {num_categories} categories)")
             print(f"Available categories: {len(self.flowchart_categories)}")
         elif iterative_reasoning:
@@ -611,7 +655,9 @@ Answer:"""
                 two_step_reasoning=two_step_reasoning,
                 num_categories=num_categories,
                 iterative_reasoning=iterative_reasoning,
-                max_reasoning_steps=max_reasoning_steps
+                max_reasoning_steps=max_reasoning_steps,
+                progressive_reasoning=progressive_reasoning,
+                num_suspicions=num_suspicions
             )
             results.append(result)
         
@@ -695,10 +741,12 @@ Answer:"""
                 'model': self.model,
                 'use_llm_judge': self.use_llm_judge,
                 'show_responses': self.show_responses,
+                'progressive_reasoning': progressive_reasoning,
                 'two_step_reasoning': two_step_reasoning,
                 'iterative_reasoning': iterative_reasoning,
                 'num_categories': num_categories if (two_step_reasoning or iterative_reasoning) else None,
-                'max_reasoning_steps': max_reasoning_steps if iterative_reasoning else None
+                'num_suspicions': num_suspicions if progressive_reasoning else None,
+                'max_reasoning_steps': max_reasoning_steps if (iterative_reasoning or progressive_reasoning) else None
             }
         }
     
@@ -1277,7 +1325,8 @@ Answer:"""
     async def evaluate_sample_async(self, sample_path: str, num_inputs: int, 
                                    provide_diagnosis_list: bool, two_step_reasoning: bool = False,
                                    num_categories: int = 3, iterative_reasoning: bool = False,
-                                   max_reasoning_steps: int = 5) -> Dict:
+                                   max_reasoning_steps: int = 5, progressive_reasoning: bool = False,
+                                   num_suspicions: int = 3) -> Dict:
         """
         Async version of evaluate_sample for concurrent processing
         """
@@ -1288,7 +1337,22 @@ Answer:"""
         # Prepare API calls that need to be made
         api_calls = []
         
-        if iterative_reasoning:
+        if progressive_reasoning:
+            # Progressive reasoning workflow - multiple sequential stages
+            # For now, use synchronous approach within async function
+            # Could be optimized further for concurrent API calls
+            progressive_result = self.progressive_reasoning_workflow(
+                sample, num_suspicions, max_reasoning_steps
+            )
+            
+            predicted = progressive_result['final_diagnosis']
+            suspicions_generated = progressive_result['suspicions']
+            recommended_tests = progressive_result['recommended_tests']
+            chosen_suspicion = progressive_result['chosen_suspicion']
+            reasoning_trace = progressive_result['reasoning_trace']
+            reasoning_steps = progressive_result['reasoning_steps']
+            
+        elif iterative_reasoning:
             # Step 1: Category selection
             category_prompt = self.create_category_selection_prompt(sample, num_inputs, num_categories)
             category_call = self.query_llm_async(category_prompt, f"category_{sample_path}", max_tokens=800)
@@ -1318,7 +1382,14 @@ Answer:"""
                 results[call_type] = responses[i]
         
         # Handle different reasoning modes
-        if iterative_reasoning:
+        if progressive_reasoning:
+            # Results already available from progressive workflow
+            # No additional API calls needed - results are in variables above
+            selected_categories = []
+            category_response = ""
+            category_correct = None
+            
+        elif iterative_reasoning:
             # Parse category selection
             if 'category_selection' in results and results['category_selection']['success']:
                 category_response = results['category_selection']['response']
@@ -1428,7 +1499,9 @@ Answer:"""
                                          two_step_reasoning: bool = False,
                                          num_categories: int = 3,
                                          iterative_reasoning: bool = False,
-                                         max_reasoning_steps: int = 5) -> Dict:
+                                         max_reasoning_steps: int = 5,
+                                         progressive_reasoning: bool = False,
+                                         num_suspicions: int = 3) -> Dict:
         """
         Concurrent version of evaluate_dataset for faster processing
         """
@@ -1478,7 +1551,9 @@ Answer:"""
                     two_step_reasoning=two_step_reasoning,
                     num_categories=num_categories,
                     iterative_reasoning=iterative_reasoning,
-                    max_reasoning_steps=max_reasoning_steps
+                    max_reasoning_steps=max_reasoning_steps,
+                    progressive_reasoning=progressive_reasoning,
+                    num_suspicions=num_suspicions
                 )
                 tasks.append(task)
             
@@ -1640,10 +1715,264 @@ Answer:"""
                 'model': self.model,
                 'use_llm_judge': self.use_llm_judge,
                 'show_responses': self.show_responses,
+                'progressive_reasoning': progressive_reasoning,
                 'two_step_reasoning': two_step_reasoning,
                 'iterative_reasoning': iterative_reasoning,
                 'num_categories': num_categories if (two_step_reasoning or iterative_reasoning) else None,
-                'max_reasoning_steps': max_reasoning_steps if iterative_reasoning else None,
-                'max_concurrent': self.max_concurrent
+                'num_suspicions': num_suspicions if progressive_reasoning else None,
+                'max_reasoning_steps': max_reasoning_steps if (iterative_reasoning or progressive_reasoning) else None
             }
         } 
+
+    def progressive_reasoning_workflow(self, sample: Dict, num_suspicions: int = 3, 
+                                     max_reasoning_steps: int = 5) -> Dict:
+        """
+        Progressive clinical workflow reasoning:
+        Stage 1: History (inputs 1-4) -> Generate top suspicions + recommended tests
+        Stage 2: Add test results (inputs 5-6) -> Choose suspicion  
+        Stage 3: Follow flowcharts iteratively to final diagnosis
+        
+        Args:
+            sample: The clinical sample data
+            num_suspicions: Number of initial suspicions to generate
+            max_reasoning_steps: Maximum reasoning steps in final stage
+        
+        Returns:
+            Dict with progressive reasoning results
+        """
+        
+        # Stage 1: Generate suspicions based on history only (inputs 1-4)
+        history_summary = self.create_history_summary(sample)
+        suspicions_prompt = self.create_suspicions_prompt(history_summary, num_suspicions)
+        suspicions_response = self.query_llm(suspicions_prompt, max_tokens=600)
+        suspicions = self.parse_suspicions(suspicions_response, num_suspicions)
+        
+        # Stage 2: Generate recommended tests based on suspicions
+        tests_prompt = self.create_tests_recommendation_prompt(history_summary, suspicions)
+        tests_response = self.query_llm(tests_prompt, max_tokens=400)
+        recommended_tests = tests_response.strip()
+        
+        # Stage 3: Present test results and choose suspicion
+        full_summary = self.create_patient_data_summary(sample, 6)  # All 6 inputs
+        suspicion_choice_prompt = self.create_suspicion_choice_prompt(
+            history_summary, full_summary, suspicions, recommended_tests
+        )
+        choice_response = self.query_llm(suspicion_choice_prompt, max_tokens=600)
+        chosen_suspicion = self.parse_suspicion_choice(choice_response, suspicions)
+        
+        # Stage 4: Progressive iterative reasoning based on chosen suspicion
+        reasoning_result = self.progressive_iterative_reasoning(
+            sample, chosen_suspicion, suspicions, max_reasoning_steps
+        )
+        
+        return {
+            'final_diagnosis': reasoning_result['final_diagnosis'],
+            'reasoning_trace': reasoning_result['reasoning_trace'],
+            'reasoning_steps': reasoning_result['reasoning_steps'],
+            'suspicions': suspicions,
+            'recommended_tests': recommended_tests,
+            'chosen_suspicion': chosen_suspicion,
+            'reasoning_successful': reasoning_result['reasoning_successful']
+        } 
+
+    def create_history_summary(self, sample: Dict) -> str:
+        """Create summary from first 4 inputs only (history)"""
+        
+        input_descriptions = {
+            1: "Chief Complaint",
+            2: "History of Present Illness", 
+            3: "Past Medical History",
+            4: "Family History"
+        }
+        
+        summary = ""
+        for i in range(1, 5):  # Only inputs 1-4
+            input_key = f"input{i}"
+            if input_key in sample:
+                content = sample[input_key]
+                summary += f"• {input_descriptions[i]}: {content}\n"
+        
+        return summary.strip()
+    
+    def create_suspicions_prompt(self, history_summary: str, num_suspicions: int) -> str:
+        """Create prompt for generating initial suspicions based on history"""
+        
+        prompt = "You are a medical expert generating initial diagnostic suspicions based on patient history.\n\n"
+        
+        prompt += f"**Patient History:**\n{history_summary}\n\n"
+        
+        prompt += f"Based ONLY on the history provided above, generate the {num_suspicions} most likely diagnostic suspicions.\n\n"
+        
+        prompt += f"**Instructions:**\n"
+        prompt += f"• Consider only the historical information provided\n"
+        prompt += f"• Focus on the most likely diagnoses given the presentation\n"
+        prompt += f"• List suspicions in order of likelihood\n"
+        prompt += f"• Provide specific diagnosis names, not broad categories\n\n"
+        
+        prompt += f"**Format:**\n"
+        for i in range(1, num_suspicions + 1):
+            prompt += f"{i}. [Specific diagnosis name]\n"
+        
+        prompt += f"\nTop {num_suspicions} Diagnostic Suspicions:"
+        
+        return prompt
+    
+    def create_tests_recommendation_prompt(self, history_summary: str, suspicions: List[str]) -> str:
+        """Create prompt for recommending necessary tests"""
+        
+        prompt = "You are a medical expert determining the minimum necessary tests to differentiate between diagnostic suspicions.\n\n"
+        
+        prompt += f"**Patient History:**\n{history_summary}\n\n"
+        
+        prompt += f"**Current Diagnostic Suspicions:**\n"
+        for i, suspicion in enumerate(suspicions, 1):
+            prompt += f"{i}. {suspicion}\n"
+        
+        prompt += f"\n**Task:**\nDetermine the minimum necessary physical examination findings and laboratory/imaging tests needed to differentiate between these suspicions and establish a diagnosis.\n\n"
+        
+        prompt += f"**Instructions:**\n"
+        prompt += f"• Focus on tests that would help distinguish between the listed suspicions\n"
+        prompt += f"• Prioritize the most informative and cost-effective tests\n"
+        prompt += f"• Include both physical exam components and lab/imaging studies\n"
+        prompt += f"• Be specific and practical\n\n"
+        
+        prompt += f"**Recommended Tests and Examinations:**"
+        
+        return prompt
+    
+    def create_suspicion_choice_prompt(self, history_summary: str, full_summary: str, 
+                                     suspicions: List[str], recommended_tests: str) -> str:
+        """Create prompt for choosing suspicion after seeing test results"""
+        
+        prompt = "You are a medical expert reviewing test results to narrow down your diagnostic suspicions.\n\n"
+        
+        prompt += f"**Initial Assessment Based on History:**\n{history_summary}\n\n"
+        
+        prompt += f"**Initial Suspicions:**\n"
+        for i, suspicion in enumerate(suspicions, 1):
+            prompt += f"{i}. {suspicion}\n"
+        
+        prompt += f"\n**Recommended Tests Were:**\n{recommended_tests}\n\n"
+        
+        prompt += f"**Now Available - Complete Clinical Information:**\n{full_summary}\n\n"
+        
+        prompt += f"**Task:**\nBased on the physical examination findings and test results now available, choose the most likely diagnosis from your initial suspicions.\n\n"
+        
+        prompt += f"**Instructions:**\n"
+        prompt += f"• Compare the actual findings with what you would expect for each suspicion\n"
+        prompt += f"• Choose the suspicion most consistent with the complete clinical picture\n"
+        prompt += f"• Provide brief reasoning for your choice\n\n"
+        
+        prompt += f"**Format:**\n"
+        prompt += f"**CHOSEN SUSPICION:** [Number] - [Diagnosis name]\n"
+        prompt += f"**REASONING:** [Brief explanation based on findings]\n"
+        
+        return prompt
+    
+    def parse_suspicions(self, response: str, num_suspicions: int) -> List[str]:
+        """Parse LLM response to extract suspicions list"""
+        
+        suspicions = []
+        lines = [line.strip() for line in response.split('\n') if line.strip()]
+        
+        import re
+        for line in lines:
+            # Look for numbered lines like "1. Diagnosis name"
+            match = re.match(r'^\d+\.\s*(.+)', line)
+            if match:
+                diagnosis = match.group(1).strip()
+                suspicions.append(diagnosis)
+                if len(suspicions) >= num_suspicions:
+                    break
+        
+        # Fill in with generic suspicions if we don't have enough
+        while len(suspicions) < num_suspicions:
+            suspicions.append(f"Suspicion {len(suspicions) + 1}")
+        
+        return suspicions[:num_suspicions]
+    
+    def parse_suspicion_choice(self, response: str, suspicions: List[str]) -> str:
+        """Parse chosen suspicion from response"""
+        
+        import re
+        
+        # Try to extract from CHOSEN SUSPICION section
+        chosen_match = re.search(r'CHOSEN SUSPICION:\s*(\d+)', response, re.IGNORECASE)
+        if chosen_match:
+            try:
+                choice_num = int(chosen_match.group(1))
+                if 1 <= choice_num <= len(suspicions):
+                    return suspicions[choice_num - 1]
+            except ValueError:
+                pass
+        
+        # Fallback: look for any number
+        number_match = re.search(r'\b(\d+)\b', response)
+        if number_match:
+            try:
+                choice_num = int(number_match.group(1))
+                if 1 <= choice_num <= len(suspicions):
+                    return suspicions[choice_num - 1]
+            except ValueError:
+                pass
+        
+        # Final fallback
+        return suspicions[0] if suspicions else "Unknown"
+    
+    def progressive_iterative_reasoning(self, sample: Dict, chosen_suspicion: str, 
+                                      all_suspicions: List[str], max_steps: int = 5) -> Dict:
+        """Iterative reasoning starting from chosen suspicion"""
+        
+        # For now, use standard iterative reasoning with the chosen suspicion as starting point
+        # This could be enhanced to use suspicion-specific flowcharts in the future
+        
+        # Try to map suspicion to a category for flowchart navigation
+        suspected_category = self.map_suspicion_to_category(chosen_suspicion)
+        
+        if suspected_category:
+            # Use iterative reasoning with this category
+            reasoning_result = self.iterative_reasoning_with_flowcharts(
+                sample, 6, [suspected_category], max_steps
+            )
+        else:
+            # Fallback: use first available category
+            if self.flowchart_categories:
+                reasoning_result = self.iterative_reasoning_with_flowcharts(
+                    sample, 6, [self.flowchart_categories[0]], max_steps
+                )
+            else:
+                reasoning_result = {
+                    'final_diagnosis': chosen_suspicion,
+                    'reasoning_trace': [{'step': 1, 'action': 'direct', 'response': f'Using chosen suspicion: {chosen_suspicion}'}],
+                    'reasoning_steps': 1,
+                    'reasoning_successful': True
+                }
+        
+        return reasoning_result
+    
+    def map_suspicion_to_category(self, suspicion: str) -> str:
+        """Map a specific suspicion to a disease category for flowchart navigation"""
+        
+        suspicion_lower = suspicion.lower()
+        
+        # Simple mapping - could be enhanced with more sophisticated matching
+        category_keywords = {
+            'cardiovascular': ['heart', 'cardiac', 'myocardial', 'coronary', 'angina', 'infarction', 'arrhythmia', 'hypertension'],
+            'respiratory': ['lung', 'pulmonary', 'pneumonia', 'asthma', 'copd', 'respiratory', 'bronch'],
+            'gastrointestinal': ['gastric', 'intestinal', 'bowel', 'stomach', 'liver', 'pancreatic', 'gallbladder'],
+            'neurological': ['stroke', 'seizure', 'neurologic', 'brain', 'headache', 'migraine'],
+            'endocrine': ['diabetes', 'thyroid', 'hormone', 'endocrine', 'metabolic'],
+            'infectious': ['infection', 'sepsis', 'bacterial', 'viral', 'pneumonia'],
+            'renal': ['kidney', 'renal', 'urinary', 'nephro'],
+            'hematologic': ['anemia', 'bleeding', 'hematologic', 'blood'],
+        }
+        
+        for category, keywords in category_keywords.items():
+            for keyword in keywords:
+                if keyword in suspicion_lower:
+                    # Find the actual category name in our flowchart categories
+                    for flowchart_category in self.flowchart_categories:
+                        if category.lower() in flowchart_category.lower():
+                            return flowchart_category
+        
+        return None 

@@ -64,13 +64,17 @@ def main():
     
     # Reasoning mode arguments
     parser.add_argument('--two-step', action='store_true',
-                       help='Use two-step diagnostic reasoning (category selection then final diagnosis)')
-    parser.add_argument('--num-categories', type=int, default=3,
-                       help='Number of disease categories to select in two-step mode (default: 3)')
+                       help='Use two-step reasoning (category selection then diagnosis)')
     parser.add_argument('--iterative', action='store_true',
-                       help='Use iterative step-by-step reasoning following flowcharts to final diagnosis')
+                       help='Use iterative step-by-step reasoning through flowcharts')
+    parser.add_argument('--progressive', action='store_true',
+                       help='Use progressive clinical workflow reasoning (history -> suspicions -> tests -> diagnosis)')
+    parser.add_argument('--num-categories', type=int, default=3,
+                       help='Number of categories to select in two-step/iterative reasoning (default: 3)')
+    parser.add_argument('--num-suspicions', type=int, default=3,
+                       help='Number of suspicions to generate in progressive reasoning (default: 3)')
     parser.add_argument('--max-reasoning-steps', type=int, default=5,
-                       help='Maximum number of reasoning steps in iterative mode (default: 5)')
+                       help='Maximum number of reasoning steps for iterative/progressive modes (default: 5)')
     
     # Concurrency arguments
     parser.add_argument('--concurrent', action='store_true',
@@ -90,15 +94,36 @@ def main():
     provide_list = args.provide_list and not args.no_list
     use_llm_judge = args.use_llm_judge and not args.no_llm_judge
     
+    # Validate reasoning mode arguments
+    reasoning_modes = [args.two_step, args.iterative, args.progressive]
+    if sum(reasoning_modes) > 1:
+        print("❌ Error: Only one reasoning mode can be specified at a time")
+        print("   Choose from: --two-step, --iterative, or --progressive")
+        return 1
+    
+    # Set reasoning mode flags
+    two_step_reasoning = args.two_step
+    iterative_reasoning = args.iterative
+    progressive_reasoning = args.progressive
+    
     # Validation for different reasoning modes
-    if args.two_step and not provide_list:
-        print("❌ Error: Two-step mode requires --provide-list (diagnosis list must be provided)")
-        return
+    if (iterative_reasoning or progressive_reasoning) and args.max_reasoning_steps < 1:
+        print("❌ Error: --max-reasoning-steps must be at least 1 for iterative/progressive reasoning")
+        return 1
     
-    if args.iterative and not provide_list:
-        print("❌ Error: Iterative mode requires --provide-list (diagnosis list must be provided)")
-        return
+    if two_step_reasoning and not provide_list:
+        print("❌ Error: Two-step reasoning requires --provide-list")
+        return 1
     
+    if iterative_reasoning and not provide_list:
+        print("❌ Error: Iterative reasoning requires --provide-list")
+        return 1
+    
+    if progressive_reasoning and not provide_list:
+        print("❌ Error: Progressive reasoning requires --provide-list")
+        return 1
+    
+    # Validation for different reasoning modes
     if args.two_step and args.iterative:
         print("❌ Error: Cannot use both --two-step and --iterative modes simultaneously")
         return
@@ -111,6 +136,7 @@ def main():
             print(f"  {name}: {config.get('model_name', config.get('model', name))} ({config['provider']})")
         return
     
+    # Create evaluator
     try:
         evaluator = DiagnosticEvaluator(
             api_key=api_key,
@@ -135,10 +161,12 @@ def main():
                 provide_diagnosis_list=provide_list,
                 max_samples=args.max_samples,
                 samples_dir=args.samples_dir,
-                two_step_reasoning=args.two_step,
+                two_step_reasoning=two_step_reasoning,
                 num_categories=args.num_categories,
-                iterative_reasoning=args.iterative,
-                max_reasoning_steps=args.max_reasoning_steps
+                iterative_reasoning=iterative_reasoning,
+                max_reasoning_steps=args.max_reasoning_steps,
+                progressive_reasoning=progressive_reasoning,
+                num_suspicions=args.num_suspicions
             ))
         else:
             # Use synchronous evaluation
@@ -147,10 +175,12 @@ def main():
                 provide_diagnosis_list=provide_list,
                 max_samples=args.max_samples,
                 samples_dir=args.samples_dir,
-                two_step_reasoning=args.two_step,
+                two_step_reasoning=two_step_reasoning,
                 num_categories=args.num_categories,
-                iterative_reasoning=args.iterative,
-                max_reasoning_steps=args.max_reasoning_steps
+                iterative_reasoning=iterative_reasoning,
+                max_reasoning_steps=args.max_reasoning_steps,
+                progressive_reasoning=progressive_reasoning,
+                num_suspicions=args.num_suspicions
             )
         
         # Print summary
@@ -165,6 +195,10 @@ def main():
             print(f"Number of categories selected: {results['configuration'].get('num_categories', 3)}")
         print(f"Iterative reasoning: {results['configuration'].get('iterative_reasoning', False)}")
         if results['configuration'].get('iterative_reasoning'):
+            print(f"Max reasoning steps: {results['configuration'].get('max_reasoning_steps', 5)}")
+        print(f"Progressive reasoning: {results['configuration'].get('progressive_reasoning', False)}")
+        if results['configuration'].get('progressive_reasoning'):
+            print(f"Number of suspicions: {results['configuration'].get('num_suspicions', 3)}")
             print(f"Max reasoning steps: {results['configuration'].get('max_reasoning_steps', 5)}")
         print(f"Concurrent processing: {args.concurrent}")
         if args.concurrent:
