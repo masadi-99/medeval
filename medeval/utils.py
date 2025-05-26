@@ -156,13 +156,31 @@ def extract_disease_category_from_path(file_path: str) -> str:
 
 
 def collect_sample_files(samples_dir: str) -> List[str]:
-    """Collect all JSON sample files from the samples directory"""
+    """Collect all JSON sample files from the samples directory, excluding checkpoints and other non-patient files"""
     sample_files = []
     
     for root, dirs, files in os.walk(samples_dir):
+        # Skip .ipynb_checkpoints directories entirely
+        dirs[:] = [d for d in dirs if d != '.ipynb_checkpoints']
+        
         for file in files:
             if file.endswith('.json'):
-                sample_files.append(os.path.join(root, file))
+                # Additional filtering to exclude checkpoint files and other non-patient files
+                file_path = os.path.join(root, file)
+                
+                # Skip if file is in a checkpoint directory (extra safety)
+                if '.ipynb_checkpoints' in file_path:
+                    continue
+                
+                # Skip if filename suggests it's a checkpoint
+                if 'checkpoint' in file.lower():
+                    continue
+                
+                # Skip hidden files
+                if file.startswith('.'):
+                    continue
+                
+                sample_files.append(file_path)
     
     return sample_files
 
