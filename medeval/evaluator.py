@@ -521,7 +521,10 @@ Answer:"""
                 'chosen_suspicion': chosen_suspicion,
                 'reasoning_trace': reasoning_trace,
                 'reasoning_steps': reasoning_steps,
-                'test_overlap_metrics': test_overlap_metrics
+                'test_overlap_metrics': test_overlap_metrics,
+                'prompts_and_responses': progressive_result.get('prompts_and_responses', []),
+                'progressive_mode': progressive_result.get('mode', 'unknown'),
+                'prompt': f"Progressive Reasoning ({progressive_result.get('mode', 'unknown')} mode) - {len(progressive_result.get('prompts_and_responses', []))} stages"
             })
         elif iterative_reasoning:
             result.update({
@@ -1539,7 +1542,10 @@ Answer:"""
                 'chosen_suspicion': chosen_suspicion,
                 'reasoning_trace': reasoning_trace,
                 'reasoning_steps': reasoning_steps,
-                'test_overlap_metrics': test_overlap_metrics
+                'test_overlap_metrics': test_overlap_metrics,
+                'prompts_and_responses': progressive_result.get('prompts_and_responses', []),
+                'progressive_mode': progressive_result.get('mode', 'unknown'),
+                'prompt': f"Progressive Reasoning ({progressive_result.get('mode', 'unknown')} mode) - {len(progressive_result.get('prompts_and_responses', []))} stages"
             })
         elif iterative_reasoning:
             result.update({
@@ -1903,6 +1909,7 @@ Now with complete clinical information available, choose your most likely diseas
             {
                 'step': 1,
                 'action': 'combined_progressive',
+                'prompt': combined_prompt,
                 'response': response,
                 'suspicions': suspicions,
                 'recommended_tests': recommended_tests,
@@ -1913,6 +1920,20 @@ Now with complete clinical information available, choose your most likely diseas
             }
         ]
         
+        # CRITICAL: Collect all prompts and responses for analysis
+        prompts_and_responses = [
+            {
+                'stage': 'combined_fast_mode',
+                'prompt': combined_prompt,
+                'response': response,
+                'parsed_suspicions': suspicions,
+                'parsed_tests': recommended_tests,
+                'parsed_choice': chosen_category,
+                'parsed_diagnosis': final_diagnosis,
+                'parsed_reasoning': reasoning
+            }
+        ]
+        
         return {
             'final_diagnosis': matched_diagnosis,
             'reasoning_trace': reasoning_trace,
@@ -1920,11 +1941,16 @@ Now with complete clinical information available, choose your most likely diseas
             'suspicions': suspicions,
             'recommended_tests': recommended_tests,
             'chosen_suspicion': chosen_category,  # The chosen category
-            'reasoning_successful': bool(matched_diagnosis)
+            'reasoning_successful': bool(matched_diagnosis),
+            'prompts_and_responses': prompts_and_responses,
+            'mode': 'fast'
         }
     
     def _progressive_reasoning_standard(self, sample: Dict, num_suspicions: int, max_reasoning_steps: int) -> Dict:
         """Standard progressive reasoning - full 4-stage workflow"""
+        
+        # CRITICAL: Track all prompts and responses for analysis
+        prompts_and_responses = []
         
         # Stage 1: Generate suspicions based on history only (inputs 1-4)
         history_summary = self.create_history_summary(sample)
@@ -1932,10 +1958,25 @@ Now with complete clinical information available, choose your most likely diseas
         suspicions_response = self.query_llm(suspicions_prompt, max_tokens=600)
         suspicions = self.parse_suspicions(suspicions_response, num_suspicions)
         
+        prompts_and_responses.append({
+            'stage': 'stage_1_suspicions',
+            'prompt': suspicions_prompt,
+            'response': suspicions_response,
+            'parsed_suspicions': suspicions,
+            'history_summary': history_summary
+        })
+        
         # Stage 2: Generate recommended tests based on suspicions
         tests_prompt = self.create_tests_recommendation_prompt(history_summary, suspicions)
         tests_response = self.query_llm(tests_prompt, max_tokens=400)
         recommended_tests = tests_response.strip()
+        
+        prompts_and_responses.append({
+            'stage': 'stage_2_tests',
+            'prompt': tests_prompt,
+            'response': tests_response,
+            'parsed_tests': recommended_tests
+        })
         
         # Stage 3: Present test results and choose suspicion
         full_summary = self.create_patient_data_summary(sample, 6)  # All 6 inputs
@@ -1945,10 +1986,32 @@ Now with complete clinical information available, choose your most likely diseas
         choice_response = self.query_llm(suspicion_choice_prompt, max_tokens=600)
         chosen_suspicion = self.parse_suspicion_choice(choice_response, suspicions)
         
+        prompts_and_responses.append({
+            'stage': 'stage_3_choice',
+            'prompt': suspicion_choice_prompt,
+            'response': choice_response,
+            'parsed_choice': chosen_suspicion,
+            'full_summary': full_summary
+        })
+        
         # Stage 4: Progressive iterative reasoning based on chosen suspicion
         reasoning_result = self.progressive_iterative_reasoning(
             sample, chosen_suspicion, suspicions, max_reasoning_steps
         )
+        
+        # Add the final reasoning prompts and responses if available
+        if 'reasoning_trace' in reasoning_result:
+            for step in reasoning_result['reasoning_trace']:
+                if 'prompt' in step:
+                    prompts_and_responses.append({
+                        'stage': f'stage_4_reasoning_step_{step.get("step", "unknown")}',
+                        'prompt': step['prompt'],
+                        'response': step.get('response', ''),
+                        'step_info': step
+                    })
+        
+        # Include the main prompt used in final reasoning (if available)
+        final_prompt = self.create_patient_data_summary(sample, 6)  # This would be used in iterative reasoning
         
         return {
             'final_diagnosis': reasoning_result['final_diagnosis'],
@@ -1957,7 +2020,9 @@ Now with complete clinical information available, choose your most likely diseas
             'suspicions': suspicions,
             'recommended_tests': recommended_tests,
             'chosen_suspicion': chosen_suspicion,
-            'reasoning_successful': reasoning_result['reasoning_successful']
+            'reasoning_successful': reasoning_result['reasoning_successful'],
+            'prompts_and_responses': prompts_and_responses,
+            'mode': 'standard'
         }
     
     def _parse_suspicions_from_text(self, text: str, num_suspicions: int) -> List[str]:
