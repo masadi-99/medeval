@@ -154,24 +154,24 @@ class CleanProgressiveReasoning:
     
     def _step1_choose_flowchart_first_step(self, sample: Dict, candidates: List[str]) -> Dict:
         """
-        FIXED Step 1: Exams/results (inputs 5-6) + k flowcharts → Choose starting diagnosis FROM FLOWCHART FIRST STEPS
+        IMPROVED Step 1: Load flowcharts and ask LLM to choose from initial diagnoses
         """
         
         # Get complete clinical information (all 6 inputs)
         full_summary = self.evaluator.create_patient_data_summary(sample, 6)
         
-        # Load flowcharts for candidates and extract FIRST STEPS with signs/symptoms
-        flowchart_first_steps_info, loaded_flowcharts = self._load_flowchart_first_steps_info(candidates)
+        # Load complete flowcharts for candidates
+        flowchart_info, loaded_flowcharts = self._load_complete_flowcharts(candidates)
         
-        # Create Step 1 prompt with FIRST STEPS and their signs/symptoms/risks
-        prompt = self._create_step1_flowchart_first_steps_prompt(full_summary, candidates, flowchart_first_steps_info)
+        # Create Step 1 prompt with complete flowchart structures
+        prompt = self._create_step1_improved_prompt(full_summary, flowchart_info)
         
         # Query LLM
         response = self.evaluator.query_llm(prompt, max_tokens=1000)
         
         # Parse chosen FIRST STEP and flowchart
         chosen_first_step, flowchart_category = self._parse_step1_first_step_choice(
-            response, flowchart_first_steps_info, loaded_flowcharts
+            response, flowchart_info, loaded_flowcharts
         )
         
         return {
@@ -182,7 +182,6 @@ class CleanProgressiveReasoning:
             'response': response,
             'chosen_first_step': chosen_first_step,  # e.g., "Suspected Pneumonia"
             'flowchart_category': flowchart_category,  # e.g., "Pneumonia"
-            'flowcharts_requested': f"Flowcharts for: {', '.join(candidates)}",
             'reasoning': self._extract_step1_reasoning(response)
         }
     
@@ -305,40 +304,38 @@ class CleanProgressiveReasoning:
         
         return prompt
     
-    def _create_step1_flowchart_first_steps_prompt(self, full_summary: str, candidates: List[str], 
-                                                  flowchart_first_steps_info: str) -> str:
-        """FIXED: Create Step 1 prompt for choosing from flowchart FIRST STEPS with signs/symptoms"""
+    def _create_step1_improved_prompt(self, full_summary: str, flowchart_info: str) -> str:
+        """Create Step 1 prompt for choosing from flowchart FIRST STEPS with signs/symptoms"""
         
-        prompt = f"""You are a medical expert with complete clinical information and diagnostic flowcharts.
+        prompt = f"""You are a medical expert with complete clinical information and access to diagnostic flowcharts.
 
 **Complete Patient Clinical Information:**
 {full_summary}
 
-**Available Flowchart Starting Points with Clinical Criteria:**
-{flowchart_first_steps_info}
+{flowchart_info}
 
-**Previously Identified Candidates (Step 0):**
-{', '.join(f'{i+1}. {cand}' for i, cand in enumerate(candidates))}
+**Task:** Choose the best initial diagnosis from the flowcharts above based on clinical findings.
 
-**Task:** Choose the best flowchart starting point based on clinical findings matching the criteria.
+**CRITICAL INSTRUCTIONS:**
+• You must choose from the "Initial Diagnosis" options listed above
+• Choose the initial diagnosis where the patient's clinical findings best match the criteria
+• Focus on evidence-based matching between patient findings and flowchart criteria
+• Do NOT choose general categories - choose the specific initial diagnosis (e.g., "Suspected Pneumonia" not "Pneumonia")
 
-**CRITICAL:** You must choose from the "STARTING POINTS" listed above, NOT the general categories.
-For example, choose "Suspected Pneumonia" rather than "Pneumonia".
-
-**Instructions:**
-• Compare patient's clinical findings against each starting point's signs/symptoms/risks
-• Choose the flowchart starting point where clinical findings best match the criteria
+**Analysis Required:**
+• Compare patient's clinical findings against each initial diagnosis criteria
+• Identify which flowchart's clinical criteria best match the patient presentation
 • Provide detailed evidence matching for your choice
-• Explain why chosen starting point is superior to other options
+• Explain why chosen initial diagnosis is superior to other options
 
 **Format:**
 **CLINICAL EVIDENCE ANALYSIS:**
-[Systematic comparison of patient findings against each starting point's criteria]
+[Systematic comparison of patient findings against each initial diagnosis criteria]
 
 **COMPARATIVE REASONING:**
-[Compare how well patient matches each starting point's signs/symptoms/risks]
+[Compare how well patient matches each flowchart's criteria and why chosen option is best]
 
-**CHOSEN STARTING POINT:** [Exact starting point name from the list above]
+**CHOSEN INITIAL DIAGNOSIS:** [Exact initial diagnosis name from the list above]
 **DETAILED REASONING:** [Complete medical justification with evidence matching]"""
         
         return prompt
@@ -346,53 +343,69 @@ For example, choose "Suspected Pneumonia" rather than "Pneumonia".
     def _create_flowchart_step_prompt(self, full_summary: str, current_node: str,
                                      next_options: List[str], step_number: int,
                                      flowchart_knowledge: Dict) -> str:
-        """Create prompt for reasoning through flowchart step"""
+        """Create prompt for reasoning through flowchart step - IMPROVED to focus only on flowchart navigation"""
         
-        prompt = f"""You are a medical expert following a diagnostic flowchart step-by-step.
+        prompt = f"""You are a medical expert following a diagnostic flowchart step-by-step to reach a final diagnosis.
 
 **Complete Patient Clinical Information:**
 {full_summary}
 
 **Current Position in Flowchart:** {current_node}
 
-**Next Possible Steps:**"""
+**Available Next Steps in Flowchart:**"""
         
         for i, option in enumerate(next_options, 1):
             prompt += f"\n{i}. {option}"
         
-        # Add flowchart knowledge
+        # Add flowchart knowledge for current node and options
         if flowchart_knowledge:
-            prompt += f"\n\n**Relevant Medical Knowledge:**"
-            for key, value in flowchart_knowledge.items():
-                if isinstance(value, dict):
-                    prompt += f"\n• {key}:"
-                    for subkey, subvalue in value.items():
-                        prompt += f"\n  - {subkey}: {subvalue}"
+            prompt += f"\n\n**Relevant Clinical Knowledge from Flowchart:**"
+            
+            # Add knowledge for current node
+            if current_node in flowchart_knowledge:
+                knowledge_text = flowchart_knowledge[current_node]
+                prompt += f"\n\n**Current Node ({current_node}):**"
+                if isinstance(knowledge_text, dict):
+                    for key, value in knowledge_text.items():
+                        prompt += f"\n• {key}: {value}"
                 else:
-                    prompt += f"\n• {key}: {value}"
+                    prompt += f"\n• {knowledge_text}"
+            
+            # Add knowledge for each next option
+            for option in next_options:
+                if option in flowchart_knowledge:
+                    knowledge_text = flowchart_knowledge[option]
+                    prompt += f"\n\n**{option}:**"
+                    if isinstance(knowledge_text, dict):
+                        for key, value in knowledge_text.items():
+                            prompt += f"\n• {key}: {value}"
+                    else:
+                        prompt += f"\n• {knowledge_text}"
         
         prompt += f"""
 
-**Task:** Choose the most appropriate next step based on patient's clinical findings.
+**Task:** Choose the most appropriate next step in the flowchart based on patient's clinical findings.
 
-**Instructions:**
-• Compare patient's findings against each option's typical presentation
-• Use medical knowledge to guide reasoning
-• Provide detailed evidence matching for each option
-• Explain why chosen option best fits the clinical picture
-• Continue following the flowchart logic systematically
+**CRITICAL INSTRUCTIONS:**
+• Follow the flowchart structure step-by-step until reaching a leaf node (final diagnosis)
+• Base your decision ONLY on patient findings matching the clinical criteria
+• Do NOT consider diagnoses outside this flowchart
+• Continue the systematic flowchart progression
+• Provide evidence-based reasoning for your choice
 
 **Format:**
-**EVIDENCE MATCHING:**
-1. {next_options[0]}: [How patient findings match/don't match]
-{f'2. {next_options[1]}: [How patient findings match/don\'t match]' if len(next_options) > 1 else ''}
-{f'3. {next_options[2]}: [How patient findings match/don\'t match]' if len(next_options) > 2 else ''}
+**EVIDENCE MATCHING:**"""
+        
+        for i, option in enumerate(next_options, 1):
+            prompt += f"\n{i}. {option}: [How patient findings match/don't match clinical criteria]"
+        
+        prompt += f"""
 
-**COMPARATIVE ANALYSIS:**
-[Why chosen option is superior to alternatives]
+**FLOWCHART REASONING:**
+[Why chosen option best fits the flowchart progression and patient evidence]
 
 **CHOSEN STEP:** [Number] - [Step name]
-**REASONING:** [Complete medical justification]"""
+**REASONING:** [Complete medical justification based on flowchart criteria]"""
         
         return prompt
     
@@ -483,18 +496,22 @@ For example, choose "Suspected Pneumonia" rather than "Pneumonia".
         
         return ""
     
-    def _parse_step1_first_step_choice(self, response: str, flowchart_first_steps_info: str,
+    def _parse_step1_first_step_choice(self, response: str, flowchart_info: str,
                                       loaded_flowcharts: Dict) -> Tuple[str, str]:
-        """FIXED: Parse chosen FIRST STEP from Step 1 response"""
+        """Parse chosen FIRST STEP from Step 1 response"""
         
-        # Extract chosen starting point
-        starting_point_match = re.search(r'CHOSEN STARTING POINT:\s*(.+?)(?=\n|\Z)', response, re.IGNORECASE)
+        # Extract chosen initial diagnosis
+        initial_diagnosis_match = re.search(r'CHOSEN INITIAL DIAGNOSIS:\s*(.+?)(?=\n|\Z)', response, re.IGNORECASE)
+        
+        # Fallback to old format
+        if not initial_diagnosis_match:
+            initial_diagnosis_match = re.search(r'CHOSEN STARTING POINT:\s*(.+?)(?=\n|\Z)', response, re.IGNORECASE)
         
         chosen_first_step = None
         flowchart_category = None
         
-        if starting_point_match:
-            chosen_text = starting_point_match.group(1).strip()
+        if initial_diagnosis_match:
+            chosen_text = initial_diagnosis_match.group(1).strip()
             
             # Find matching first step from loaded flowcharts
             for category, flowchart_data in loaded_flowcharts.items():
@@ -572,10 +589,10 @@ For example, choose "Suspected Pneumonia" rather than "Pneumonia".
         
         return summary.strip()
     
-    def _load_flowchart_first_steps_info(self, candidates: List[str]) -> Tuple[str, Dict]:
-        """FIXED: Load flowchart FIRST STEPS with their signs/symptoms/risks for Stage 3 decision"""
+    def _load_complete_flowcharts(self, candidates: List[str]) -> Tuple[str, Dict]:
+        """Load complete flowcharts for candidates and present initial diagnoses for selection"""
         
-        flowchart_info = "**FLOWCHART STARTING POINTS:**\n\n"
+        flowchart_info = "**AVAILABLE FLOWCHARTS AND INITIAL DIAGNOSES:**\n\n"
         loaded_flowcharts = {}
         
         for candidate in candidates:
@@ -583,28 +600,42 @@ For example, choose "Suspected Pneumonia" rather than "Pneumonia".
                 flowchart_data = load_flowchart_content(candidate, self.flowchart_dir)
                 loaded_flowcharts[candidate] = flowchart_data
                 
-                # Get first step and its clinical criteria
+                # Get first step (initial diagnosis)
                 first_step = get_flowchart_first_step(flowchart_data)
+                flowchart_structure = get_flowchart_structure(flowchart_data)
                 flowchart_knowledge = get_flowchart_knowledge(flowchart_data)
                 
-                flowchart_info += f"**{first_step}** (from {candidate} flowchart):\n"
+                flowchart_info += f"**{candidate} Flowchart:**\n"
+                flowchart_info += f"Initial Diagnosis: **{first_step}**\n"
                 
-                # Add signs, symptoms, risks, etc. for this first step
-                if flowchart_knowledge:
-                    for key, value in flowchart_knowledge.items():
-                        if isinstance(value, dict):
-                            flowchart_info += f"• {key}:\n"
-                            for subkey, subvalue in value.items():
-                                flowchart_info += f"  - {subkey}: {subvalue}\n"
-                        else:
+                # Add clinical criteria for the initial diagnosis
+                if flowchart_knowledge and first_step in flowchart_knowledge:
+                    criteria = flowchart_knowledge[first_step]
+                    if isinstance(criteria, dict):
+                        flowchart_info += f"Clinical Criteria:\n"
+                        for key, value in criteria.items():
                             flowchart_info += f"• {key}: {value}\n"
+                    else:
+                        flowchart_info += f"Clinical Criteria: {criteria}\n"
+                
+                # Add partial flowchart structure to show progression
+                if flowchart_structure:
+                    flowchart_info += f"Flowchart Structure:\n"
+                    # Show first level of the flowchart
+                    if isinstance(flowchart_structure, dict):
+                        for key, value in list(flowchart_structure.items())[:3]:  # Show first 3 nodes
+                            flowchart_info += f"• {key}\n"
+                            if isinstance(value, dict) and value:
+                                for subkey in list(value.keys())[:2]:  # Show first 2 subnodes
+                                    flowchart_info += f"  → {subkey}\n"
                 
                 flowchart_info += "\n"
                 
             except Exception as e:
                 print(f"Warning: Could not load flowchart for {candidate}: {e}")
-                flowchart_info += f"**Suspected {candidate}** (flowchart unavailable):\n"
-                flowchart_info += f"• General {candidate} clinical presentation\n\n"
+                flowchart_info += f"**{candidate} Flowchart:**\n"
+                flowchart_info += f"Initial Diagnosis: **Suspected {candidate}** (flowchart unavailable)\n"
+                flowchart_info += f"Clinical Criteria: General {candidate} presentation\n\n"
                 loaded_flowcharts[candidate] = {}
         
         return flowchart_info.strip(), loaded_flowcharts
