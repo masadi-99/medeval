@@ -1820,7 +1820,7 @@ Answer:"""
         } 
 
     def progressive_reasoning_workflow(self, sample: Dict, num_suspicions: int = 3, 
-                                     max_reasoning_steps: int = 5, fast_mode: bool = True) -> Dict:
+                                     max_reasoning_steps: int = 5, fast_mode: bool = False) -> Dict:
         """
         Progressive clinical workflow reasoning:
         Stage 1: History (inputs 1-4) -> Generate top suspicions + recommended tests
