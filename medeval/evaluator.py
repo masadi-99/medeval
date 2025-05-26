@@ -38,6 +38,12 @@ from .models import (
     ModelResponse
 )
 
+# Import and use the clean progressive reasoning system
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+from clean_progressive_reasoning import CleanProgressiveReasoning, integrate_clean_progressive_reasoning
+
 
 @dataclass
 class RateLimiter:
@@ -1822,10 +1828,10 @@ Answer:"""
     def progressive_reasoning_workflow(self, sample: Dict, num_suspicions: int = 3, 
                                      max_reasoning_steps: int = 5, fast_mode: bool = False) -> Dict:
         """
-        Progressive clinical workflow reasoning:
-        Stage 1: History (inputs 1-4) -> Generate top suspicions + recommended tests
-        Stage 2: Add test results (inputs 5-6) -> Choose suspicion  
-        Stage 3: Follow flowcharts iteratively to final diagnosis
+        Progressive clinical workflow reasoning using CLEAN SYSTEM:
+        Stage 0: History -> Generate suspicions (categories)
+        Stage 1: Load flowcharts -> Choose first step from flowchart structures  
+        Stage 2: Follow flowcharts step-by-step to final diagnosis
         
         Args:
             sample: The clinical sample data
@@ -1837,208 +1843,15 @@ Answer:"""
             Dict with progressive reasoning results
         """
         
-        if fast_mode:
-            # Fast mode: Combine stages 1-3 into a single API call
-            return self._progressive_reasoning_fast(sample, num_suspicions, max_reasoning_steps)
-        else:
-            # Standard mode: Full 4-stage workflow
-            return self._progressive_reasoning_standard(sample, num_suspicions, max_reasoning_steps)
-    
-    def _progressive_reasoning_fast(self, sample: Dict, num_suspicions: int, max_reasoning_steps: int) -> Dict:
-        """Fast progressive reasoning - combines multiple stages"""
+        # Create clean reasoning instance
+        clean_reasoning = CleanProgressiveReasoning(evaluator=self)
         
-        # Get history and full clinical information
-        history_summary = self.create_history_summary(sample)
-        full_summary = self.create_patient_data_summary(sample, 6)
-        
-        # Single combined prompt for stages 1-3
-        combined_prompt = f"""You are a medical expert following a progressive clinical workflow.
-
-**STAGE 1 - Initial Assessment (History Only):**
-{history_summary}
-
-**Available Disease Categories:**
-{chr(10).join(f"{i}. {cat}" for i, cat in enumerate(self.flowchart_categories, 1))}
-
-Based on this history, select {num_suspicions} most likely disease categories from the list above.
-
-**STAGE 2 - Test Planning:**
-For your chosen categories, what physical exam and lab/imaging tests would be most helpful to differentiate between them?
-
-**STAGE 3 - Final Assessment (Complete Information):**
-{full_summary}
-
-Now with complete clinical information available, choose your most likely disease category and then provide a specific diagnosis.
-
-**Possible Primary Discharge Diagnoses:**"""
-        for i, diagnosis in enumerate(self.possible_diagnoses, 1):
-            combined_prompt += f"\n{i}. {diagnosis}"
-        
-        combined_prompt += f"""
-
-**INSTRUCTIONS:**
-• Choose categories from the disease categories list above
-• IMPORTANT: Your final diagnosis MUST be selected from the possible diagnoses list above
-• Use the complete clinical information to make your final diagnosis
-
-**FORMAT:**
-**INITIAL CATEGORY SUSPICIONS:** [List {num_suspicions} categories]
-**RECOMMENDED TESTS:** [Brief list of key tests]
-**CHOSEN CATEGORY:** [Best category from suspicions]
-**FINAL DIAGNOSIS:** [Exact diagnosis name from the possible diagnoses list above]
-**REASONING:** [Brief explanation for final diagnosis]"""
-        
-        # Single API call
-        response = self.query_llm(combined_prompt, max_tokens=800)
-        
-        # Parse response
-        import re
-        
-        # Extract category suspicions
-        suspicions_match = re.search(r'INITIAL CATEGORY SUSPICIONS:\s*(.*?)(?=\*\*RECOMMENDED TESTS:|$)', response, re.DOTALL | re.IGNORECASE)
-        suspicions_text = suspicions_match.group(1).strip() if suspicions_match else ""
-        suspicions = self._parse_suspicions_from_text(suspicions_text, num_suspicions)
-        
-        # Extract recommended tests
-        tests_match = re.search(r'RECOMMENDED TESTS:\s*(.*?)(?=\*\*CHOSEN CATEGORY:|$)', response, re.DOTALL | re.IGNORECASE)
-        recommended_tests = tests_match.group(1).strip() if tests_match else ""
-        
-        # Extract chosen category
-        category_match = re.search(r'CHOSEN CATEGORY:\s*(.*?)(?=\*\*FINAL DIAGNOSIS:|$)', response, re.DOTALL | re.IGNORECASE)
-        chosen_category = category_match.group(1).strip() if category_match else ""
-        
-        # Extract final diagnosis
-        diagnosis_match = re.search(r'FINAL DIAGNOSIS:\s*(.*?)(?=\*\*REASONING:|$)', response, re.DOTALL | re.IGNORECASE)
-        final_diagnosis = diagnosis_match.group(1).strip() if diagnosis_match else ""
-        
-        # Extract reasoning
-        reasoning_match = re.search(r'REASONING:\s*(.*?)$', response, re.DOTALL | re.IGNORECASE)
-        reasoning = reasoning_match.group(1).strip() if reasoning_match else ""
-        
-        # Match final diagnosis against possible diagnoses
-        matched_diagnosis = self.find_best_match(final_diagnosis)
-        
-        # Create reasoning trace
-        reasoning_trace = [
-            {
-                'step': 1,
-                'action': 'combined_progressive',
-                'prompt': combined_prompt,
-                'response': response,
-                'suspicions': suspicions,
-                'recommended_tests': recommended_tests,
-                'chosen_category': chosen_category,
-                'final_diagnosis': final_diagnosis,
-                'matched_diagnosis': matched_diagnosis,
-                'reasoning': reasoning
-            }
-        ]
-        
-        # CRITICAL: Collect all prompts and responses for analysis
-        prompts_and_responses = [
-            {
-                'stage': 'combined_fast_mode',
-                'prompt': combined_prompt,
-                'response': response,
-                'parsed_suspicions': suspicions,
-                'parsed_tests': recommended_tests,
-                'parsed_choice': chosen_category,
-                'parsed_diagnosis': final_diagnosis,
-                'parsed_reasoning': reasoning
-            }
-        ]
-        
-        return {
-            'final_diagnosis': matched_diagnosis,
-            'reasoning_trace': reasoning_trace,
-            'reasoning_steps': 1,
-            'suspicions': suspicions,
-            'recommended_tests': recommended_tests,
-            'chosen_suspicion': chosen_category,  # The chosen category
-            'reasoning_successful': bool(matched_diagnosis),
-            'prompts_and_responses': prompts_and_responses,
-            'mode': 'fast'
-        }
-    
-    def _progressive_reasoning_standard(self, sample: Dict, num_suspicions: int, max_reasoning_steps: int) -> Dict:
-        """Standard progressive reasoning - full 4-stage workflow"""
-        
-        # CRITICAL: Track all prompts and responses for analysis
-        prompts_and_responses = []
-        
-        # Stage 1: Generate suspicions based on history only (inputs 1-4)
-        history_summary = self.create_history_summary(sample)
-        suspicions_prompt = self.create_suspicions_prompt(history_summary, num_suspicions)
-        suspicions_response = self.query_llm(suspicions_prompt, max_tokens=600)
-        suspicions = self.parse_suspicions(suspicions_response, num_suspicions)
-        
-        prompts_and_responses.append({
-            'stage': 'stage_1_suspicions',
-            'prompt': suspicions_prompt,
-            'response': suspicions_response,
-            'parsed_suspicions': suspicions,
-            'history_summary': history_summary
-        })
-        
-        # Stage 2: Generate recommended tests based on suspicions
-        tests_prompt = self.create_tests_recommendation_prompt(history_summary, suspicions)
-        tests_response = self.query_llm(tests_prompt, max_tokens=400)
-        recommended_tests = tests_response.strip()
-        
-        prompts_and_responses.append({
-            'stage': 'stage_2_tests',
-            'prompt': tests_prompt,
-            'response': tests_response,
-            'parsed_tests': recommended_tests
-        })
-        
-        # Stage 3: Present test results and choose suspicion
-        full_summary = self.create_patient_data_summary(sample, 6)  # All 6 inputs
-        suspicion_choice_prompt = self.create_suspicion_choice_prompt(
-            history_summary, full_summary, suspicions, recommended_tests
+        # Use the clean progressive reasoning workflow
+        return clean_reasoning.run_progressive_workflow(
+            sample=sample, 
+            num_candidates=num_suspicions, 
+            max_reasoning_steps=max_reasoning_steps
         )
-        choice_response = self.query_llm(suspicion_choice_prompt, max_tokens=600)
-        chosen_suspicion, choice_reasoning = self.parse_suspicion_choice(choice_response, suspicions)
-        
-        prompts_and_responses.append({
-            'stage': 'stage_3_choice',
-            'prompt': suspicion_choice_prompt,
-            'response': choice_response,
-            'parsed_choice': chosen_suspicion,
-            'choice_reasoning': choice_reasoning,  # CRITICAL: Save the reasoning for why this choice was made
-            'full_summary': full_summary
-        })
-        
-        # Stage 4: Progressive iterative reasoning based on chosen suspicion
-        reasoning_result = self.progressive_iterative_reasoning(
-            sample, chosen_suspicion, suspicions, max_reasoning_steps
-        )
-        
-        # Add the final reasoning prompts and responses if available
-        if 'reasoning_trace' in reasoning_result:
-            for step in reasoning_result['reasoning_trace']:
-                if 'prompt' in step:
-                    prompts_and_responses.append({
-                        'stage': f'stage_4_reasoning_step_{step.get("step", "unknown")}',
-                        'prompt': step['prompt'],
-                        'response': step.get('response', ''),
-                        'step_info': step
-                    })
-        
-        # Include the main prompt used in final reasoning (if available)
-        final_prompt = self.create_patient_data_summary(sample, 6)  # This would be used in iterative reasoning
-        
-        return {
-            'final_diagnosis': reasoning_result['final_diagnosis'],
-            'reasoning_trace': reasoning_result['reasoning_trace'],
-            'reasoning_steps': reasoning_result['reasoning_steps'],
-            'suspicions': suspicions,
-            'recommended_tests': recommended_tests,
-            'chosen_suspicion': chosen_suspicion,
-            'reasoning_successful': reasoning_result['reasoning_successful'],
-            'prompts_and_responses': prompts_and_responses,
-            'mode': 'standard'
-        }
     
     def _parse_suspicions_from_text(self, text: str, num_suspicions: int) -> List[str]:
         """Parse suspicions from combined response text"""
