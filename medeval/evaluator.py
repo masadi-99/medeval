@@ -1888,13 +1888,29 @@ Now with complete clinical information available, choose your most likely diagno
             match = re.match(r'^(?:\d+\.|[•-])\s*(.+)', line)
             if match:
                 diagnosis = match.group(1).strip()
-                suspicions.append(diagnosis)
-                if len(suspicions) >= num_suspicions:
-                    break
+                
+                # Clean up markdown formatting
+                diagnosis = re.sub(r'^\*+', '', diagnosis)  # Remove leading asterisks
+                diagnosis = re.sub(r'\*+$', '', diagnosis)  # Remove trailing asterisks
+                diagnosis = re.sub(r'^\*+(.+?)\*+$', r'\1', diagnosis)  # Remove surrounding asterisks
+                diagnosis = diagnosis.strip()
+                
+                # Skip empty or invalid entries
+                if diagnosis and not diagnosis.startswith('*') and len(diagnosis) > 1:
+                    suspicions.append(diagnosis)
+                    if len(suspicions) >= num_suspicions:
+                        break
             elif line and not re.match(r'^[A-Z\s]+:', line):  # Not a section header
-                suspicions.append(line)
-                if len(suspicions) >= num_suspicions:
-                    break
+                clean_line = line.strip()
+                # Clean up markdown formatting
+                clean_line = re.sub(r'^\*+', '', clean_line)
+                clean_line = re.sub(r'\*+$', '', clean_line)
+                clean_line = clean_line.strip()
+                
+                if clean_line and not clean_line.startswith('*') and len(clean_line) > 1:
+                    suspicions.append(clean_line)
+                    if len(suspicions) >= num_suspicions:
+                        break
         
         # Fill in with generic suspicions if we don't have enough
         while len(suspicions) < num_suspicions:
@@ -1928,17 +1944,24 @@ Now with complete clinical information available, choose your most likely diagno
         
         prompt += f"**Patient History:**\n{history_summary}\n\n"
         
-        prompt += f"Based ONLY on the history provided above, generate the {num_suspicions} most likely diagnostic suspicions.\n\n"
+        # CRITICAL: Provide the list of possible diagnoses to constrain suspicions
+        prompt += f"**Available Diagnoses to Consider:**\n"
+        for i, diagnosis in enumerate(self.possible_diagnoses, 1):
+            prompt += f"{i}. {diagnosis}\n"
+        prompt += "\n"
+        
+        prompt += f"Based on the patient history above, select the {num_suspicions} most likely diagnostic suspicions from the available diagnoses list.\n\n"
         
         prompt += f"**Instructions:**\n"
-        prompt += f"• Consider only the historical information provided\n"
+        prompt += f"• Choose ONLY from the available diagnoses listed above\n"
+        prompt += f"• Consider the historical information provided\n"
         prompt += f"• Focus on the most likely diagnoses given the presentation\n"
         prompt += f"• List suspicions in order of likelihood\n"
-        prompt += f"• Provide specific diagnosis names, not broad categories\n\n"
+        prompt += f"• Use the exact diagnosis names from the list\n\n"
         
         prompt += f"**Format:**\n"
         for i in range(1, num_suspicions + 1):
-            prompt += f"{i}. [Specific diagnosis name]\n"
+            prompt += f"{i}. [Exact diagnosis name from available list]\n"
         
         prompt += f"\nTop {num_suspicions} Diagnostic Suspicions:"
         
@@ -2008,9 +2031,34 @@ Now with complete clinical information available, choose your most likely diagno
             match = re.match(r'^\d+\.\s*(.+)', line)
             if match:
                 diagnosis = match.group(1).strip()
-                suspicions.append(diagnosis)
-                if len(suspicions) >= num_suspicions:
-                    break
+                
+                # Clean up markdown formatting
+                diagnosis = re.sub(r'^\*+', '', diagnosis)  # Remove leading asterisks
+                diagnosis = re.sub(r'\*+$', '', diagnosis)  # Remove trailing asterisks
+                diagnosis = re.sub(r'^\*+(.+?)\*+$', r'\1', diagnosis)  # Remove surrounding asterisks
+                diagnosis = diagnosis.strip()
+                
+                # Skip empty or invalid entries
+                if diagnosis and not diagnosis.startswith('*') and len(diagnosis) > 1:
+                    suspicions.append(diagnosis)
+                    if len(suspicions) >= num_suspicions:
+                        break
+        
+        # If we didn't find enough from numbered format, try other formats
+        if len(suspicions) < num_suspicions:
+            for line in lines:
+                # Look for lines that might be diagnoses (not section headers)
+                if not re.match(r'^[A-Z\s]+:', line) and not line.startswith('**') and not line.startswith('#'):
+                    # Clean line
+                    clean_line = re.sub(r'[•\-\*]\s*', '', line).strip()
+                    clean_line = re.sub(r'^\*+', '', clean_line)
+                    clean_line = re.sub(r'\*+$', '', clean_line)
+                    clean_line = clean_line.strip()
+                    
+                    if clean_line and len(clean_line) > 2 and clean_line not in suspicions:
+                        suspicions.append(clean_line)
+                        if len(suspicions) >= num_suspicions:
+                            break
         
         # Fill in with generic suspicions if we don't have enough
         while len(suspicions) < num_suspicions:

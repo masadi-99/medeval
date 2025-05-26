@@ -152,7 +152,7 @@ def test_logic_only():
     print("=" * 50)
     
     try:
-        # Create evaluator
+        # Test 1: Basic evaluator initialization
         evaluator = DiagnosticEvaluator(
             api_key="dummy",
             model="gpt-4o-mini",
@@ -163,9 +163,18 @@ def test_logic_only():
         print(f"📊 Found {len(evaluator.possible_diagnoses)} possible diagnoses")
         print(f"📁 Found {len(evaluator.flowchart_categories)} flowchart categories")
         
-        # Test find_best_match function
+        # Test 2: Suspicions prompt includes diagnoses
+        prompt_test = test_suspicions_prompt_includes_diagnoses()
+        
+        # Test 3: Suspicions parsing handles markdown
+        parsing_test = test_suspicions_parsing_markdown()
+        
+        # Test 4: find_best_match function
+        print("\n🔍 Testing find_best_match function")
+        print("-" * 50)
         test_diagnoses = ["Bacterial Pneumonia", "Viral Pneumonia", "Community-Acquired Pneumonia"]
         
+        match_test_passed = True
         for test_diagnosis in test_diagnoses:
             matched = evaluator.find_best_match(test_diagnosis)
             print(f"🔍 '{test_diagnosis}' -> '{matched}'")
@@ -179,13 +188,139 @@ def test_logic_only():
         unmatched = evaluator.find_best_match("Completely Unknown Disease XYZ")
         print(f"🔍 'Completely Unknown Disease XYZ' -> '{unmatched}'")
         
-        print("✅ Logic tests completed successfully")
-        return True
+        all_tests_passed = prompt_test and parsing_test and match_test_passed
+        
+        if all_tests_passed:
+            print("\n✅ All logic tests completed successfully")
+        else:
+            print("\n⚠️  Some logic tests failed")
+        
+        return all_tests_passed
         
     except Exception as e:
         print(f"❌ Logic test failed: {e}")
         import traceback
         traceback.print_exc()
+        return False
+
+def test_suspicions_prompt_includes_diagnoses():
+    """Test that suspicions prompt includes possible diagnoses list"""
+    
+    print("🔍 Testing Suspicions Prompt Includes Diagnoses")
+    print("-" * 50)
+    
+    try:
+        # Create evaluator
+        evaluator = DiagnosticEvaluator(
+            api_key="dummy",
+            model="gpt-4o-mini",
+            show_responses=False
+        )
+        
+        # Create a sample history summary
+        history_summary = """• Chief Complaint: Chest pain for 2 hours
+• History of Present Illness: 55-year-old male with sudden onset severe chest pain
+• Past Medical History: Hypertension, diabetes
+• Family History: Father had MI at age 60"""
+        
+        # Generate suspicions prompt
+        prompt = evaluator.create_suspicions_prompt(history_summary, 3)
+        
+        print(f"📝 Generated suspicions prompt length: {len(prompt)} characters")
+        
+        # Check that the prompt includes possible diagnoses
+        diagnoses_in_prompt = 0
+        for diagnosis in evaluator.possible_diagnoses[:10]:  # Check first 10
+            if diagnosis in prompt:
+                diagnoses_in_prompt += 1
+        
+        print(f"✅ Found {diagnoses_in_prompt}/10 sample diagnoses in prompt")
+        
+        # Check key phrases
+        required_phrases = [
+            "Available Diagnoses to Consider",
+            "from the available diagnoses list",
+            "exact diagnosis names from the list"
+        ]
+        
+        phrases_found = 0
+        for phrase in required_phrases:
+            if phrase in prompt:
+                phrases_found += 1
+                print(f"✅ Found required phrase: '{phrase}'")
+            else:
+                print(f"❌ Missing required phrase: '{phrase}'")
+        
+        if diagnoses_in_prompt >= 5 and phrases_found == len(required_phrases):
+            print("✅ Suspicions prompt correctly includes possible diagnoses")
+            return True
+        else:
+            print("❌ Suspicions prompt missing diagnoses or required phrases")
+            return False
+        
+    except Exception as e:
+        print(f"❌ Test failed: {e}")
+        return False
+
+def test_suspicions_parsing_markdown():
+    """Test that suspicions parsing handles markdown correctly"""
+    
+    print("\n🔧 Testing Suspicions Parsing with Markdown")
+    print("-" * 50)
+    
+    try:
+        # Create evaluator
+        evaluator = DiagnosticEvaluator(
+            api_key="dummy",
+            model="gpt-4o-mini",
+            show_responses=False
+        )
+        
+        # Test cases with markdown formatting issues
+        test_cases = [
+            {
+                'response': """1. **Bacterial Pneumonia**
+2. **Viral Pneumonia**  
+3. **Community-Acquired Pneumonia**""",
+                'expected': ['Bacterial Pneumonia', 'Viral Pneumonia', 'Community-Acquired Pneumonia']
+            },
+            {
+                'response': """1. **
+2. Bacterial Pneumonia
+3. Asthma-COPD exacerbation""",
+                'expected': ['Bacterial Pneumonia', 'Asthma-COPD exacerbation']
+            },
+            {
+                'response': """**INITIAL SUSPICIONS:**
+1. Acute Myocardial Infarction
+2. **Unstable Angina**
+3. *Pulmonary Embolism*""",
+                'expected': ['Acute Myocardial Infarction', 'Unstable Angina', 'Pulmonary Embolism']
+            }
+        ]
+        
+        all_passed = True
+        for i, test_case in enumerate(test_cases, 1):
+            print(f"\n📝 Test case {i}:")
+            print(f"Input: {test_case['response'][:50]}...")
+            
+            parsed = evaluator.parse_suspicions(test_case['response'], 3)
+            print(f"Parsed: {parsed}")
+            print(f"Expected: {test_case['expected']}")
+            
+            # Check if we got valid diagnoses (not just asterisks)
+            valid_diagnoses = [d for d in parsed if d and not d.startswith('*') and len(d) > 1]
+            
+            if len(valid_diagnoses) >= 2:  # At least 2 valid diagnoses
+                print(f"✅ Test case {i} passed - found {len(valid_diagnoses)} valid diagnoses")
+            else:
+                print(f"❌ Test case {i} failed - only {len(valid_diagnoses)} valid diagnoses")
+                all_passed = False
+        
+        return all_passed
+        
+    except Exception as e:
+        print(f"❌ Parsing test failed: {e}")
         return False
 
 def main():
