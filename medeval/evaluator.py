@@ -2166,9 +2166,7 @@ Now with complete clinical information available, choose your most likely diseas
         for i, suspicion in enumerate(suspicions, 1):
             prompt += f"{i}. {suspicion}\n"
         
-        prompt += f"\n**Recommended Tests Were:**\n{recommended_tests}\n\n"
-        
-        prompt += f"**Now Available - Complete Clinical Information:**\n{full_summary}\n\n"
+        prompt += f"\n**Now Available - Complete Clinical Information:**\n{full_summary}\n\n"
         
         prompt += f"**Task:**\nBased on the physical examination findings and test results now available, choose the most likely diagnosis from your initial suspicions.\n\n"
         
