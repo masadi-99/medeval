@@ -2293,54 +2293,271 @@ Now with complete clinical information available, choose your most likely diseas
     
     def progressive_iterative_reasoning(self, sample: Dict, chosen_suspicion: str, 
                                       all_suspicions: List[str], max_steps: int = 5) -> Dict:
-        """Iterative reasoning starting from chosen suspicion"""
+        """REFACTORED: Progressive reasoning that builds on Stage 3 choice instead of starting over"""
         
-        # CRITICAL FIX: Try to map suspicion to broader category first, rather than treating
-        # specific diseases as categories. This prevents issues where "Tuberculosis" is chosen
-        # as a suspicion for a pneumonia case, but we have both Tuberculosis.json and Pneumonia.json
-        suspected_category = None
+        # Get the complete patient summary for Stage 4 reasoning
+        patient_summary = self.create_patient_data_summary(sample, 6)
         
-        # First priority: Map suspicion to a broader category for flowchart navigation
+        # Map suspicion to category for flowchart navigation
         suspected_category = self.map_suspicion_to_category(chosen_suspicion)
         
-        # Second priority: Only if mapping failed AND suspicion is already a category name
+        # If no mapping found, try direct category match
         if suspected_category is None and chosen_suspicion in self.flowchart_categories:
             suspected_category = chosen_suspicion
         
         if suspected_category:
-            # Use iterative reasoning with this category, including possible diagnoses
-            reasoning_result = self.iterative_reasoning_with_flowcharts(
-                sample, 6, [suspected_category], max_steps
+            # Use progressive flowchart reasoning that builds on Stage 3
+            reasoning_result = self.progressive_flowchart_reasoning(
+                sample, chosen_suspicion, suspected_category, patient_summary, max_steps
             )
-            
-            # CRITICAL: Match the final diagnosis against possible diagnoses
-            final_diagnosis = reasoning_result['final_diagnosis']
-            matched_diagnosis = self.find_best_match(final_diagnosis)
-            reasoning_result['final_diagnosis'] = matched_diagnosis
-            
         else:
-            # Fallback: try to match chosen suspicion directly against possible diagnoses
+            # Fallback: direct match without flowcharts
             matched_diagnosis = self.find_best_match(chosen_suspicion)
-            
-            # If no match found, try standard iterative reasoning with first category
-            if matched_diagnosis == chosen_suspicion and self.flowchart_categories:
-                reasoning_result = self.iterative_reasoning_with_flowcharts(
-                    sample, 6, [self.flowchart_categories[0]], max_steps
-                )
-                # Match against possible diagnoses
-                final_diagnosis = reasoning_result['final_diagnosis']
-                matched_diagnosis = self.find_best_match(final_diagnosis)
-                reasoning_result['final_diagnosis'] = matched_diagnosis
-            else:
-                # Use the matched suspicion directly
-                reasoning_result = {
-                    'final_diagnosis': matched_diagnosis,
-                    'reasoning_trace': [{'step': 1, 'action': 'direct_match', 'response': f'Matched chosen suspicion "{chosen_suspicion}" to possible diagnosis "{matched_diagnosis}"'}],
-                    'reasoning_steps': 1,
-                    'reasoning_successful': True
-                }
+            reasoning_result = {
+                'final_diagnosis': matched_diagnosis,
+                'reasoning_trace': [{
+                    'step': 1, 
+                    'action': 'direct_match', 
+                    'chosen_suspicion': chosen_suspicion,
+                    'matched_diagnosis': matched_diagnosis,
+                    'response': f'Stage 3 chose "{chosen_suspicion}", matched to diagnosis "{matched_diagnosis}"'
+                }],
+                'reasoning_steps': 1,
+                'reasoning_successful': True
+            }
         
         return reasoning_result
+    
+    def progressive_flowchart_reasoning(self, sample: Dict, chosen_suspicion: str, 
+                                     category: str, patient_summary: str, max_steps: int = 5) -> Dict:
+        """NEW: Progressive reasoning that builds on Stage 3 choice with flowchart guidance"""
+        
+        reasoning_trace = []
+        
+        # Load flowchart for the category
+        try:
+            flowchart_data = load_flowchart_content(category, self.flowchart_dir)
+            flowchart_structure = get_flowchart_structure(flowchart_data)
+            flowchart_knowledge = get_flowchart_knowledge(flowchart_data)
+        except Exception as e:
+            print(f"Warning: Could not load flowchart for {category}: {e}")
+            # Fallback to direct matching
+            matched_diagnosis = self.find_best_match(chosen_suspicion)
+            return {
+                'final_diagnosis': matched_diagnosis,
+                'reasoning_trace': [{
+                    'step': 1, 
+                    'action': 'flowchart_unavailable',
+                    'response': f'Flowchart for {category} unavailable, using direct match: {matched_diagnosis}'
+                }],
+                'reasoning_steps': 1,
+                'reasoning_successful': True
+            }
+        
+        # Step 1: Build on Stage 3 reasoning with flowchart guidance
+        stage4_initial_prompt = self.create_stage4_initial_prompt(
+            chosen_suspicion, category, patient_summary, flowchart_knowledge
+        )
+        stage4_initial_response = self.query_llm(stage4_initial_prompt, max_tokens=800)
+        
+        # Parse the initial Stage 4 response for next steps
+        next_step_info = self.parse_stage4_initial_response(stage4_initial_response, flowchart_structure)
+        
+        reasoning_trace.append({
+            'step': 1,
+            'category': category,
+            'chosen_suspicion': chosen_suspicion,
+            'current_node': next_step_info.get('current_node', chosen_suspicion),
+            'action': 'stage4_initial_reasoning',
+            'prompt': stage4_initial_prompt,
+            'response': stage4_initial_response,
+            'reasoning_type': 'building_on_stage3_choice'
+        })
+        
+        # Continue with flowchart-guided reasoning if needed
+        current_node = next_step_info.get('current_node', chosen_suspicion)
+        current_step = 2
+        
+        # If we already have a final diagnosis from Stage 4 initial reasoning, use it
+        if next_step_info.get('final_diagnosis'):
+            final_diagnosis = next_step_info['final_diagnosis']
+        else:
+            # Continue with iterative flowchart reasoning
+            final_diagnosis = current_node
+            
+            while current_step <= max_steps:
+                # Check if current node is a final diagnosis
+                if is_leaf_diagnosis(flowchart_structure, current_node):
+                    final_diagnosis = current_node
+                    break
+                
+                # Get possible next steps from flowchart
+                children = get_flowchart_children(flowchart_structure, current_node)
+                if not children:
+                    final_diagnosis = current_node
+                    break
+                
+                # Create reasoning step prompt that builds on previous reasoning
+                step_prompt = self.create_progressive_step_prompt(
+                    current_step, current_node, children, patient_summary, 
+                    reasoning_trace[-1]['response']  # Previous reasoning
+                )
+                
+                step_response = self.query_llm(step_prompt, max_tokens=800)
+                step_result = extract_reasoning_choice(step_response, children)
+                chosen_option = step_result['chosen_option']
+                
+                reasoning_trace.append({
+                    'step': current_step,
+                    'category': category,
+                    'current_node': current_node,
+                    'available_options': children,
+                    'chosen_option': chosen_option,
+                    'action': 'progressive_reasoning_step',
+                    'prompt': step_prompt,
+                    'response': step_response,
+                    'evidence_matching': step_result.get('evidence_matching', ''),
+                    'comparative_analysis': step_result.get('comparative_analysis', ''),
+                    'rationale': step_result.get('rationale', '')
+                })
+                
+                current_node = chosen_option
+                current_step += 1
+            
+            final_diagnosis = current_node
+        
+        # Match final diagnosis against possible diagnoses
+        matched_diagnosis = self.find_best_match(final_diagnosis)
+        
+        return {
+            'final_diagnosis': matched_diagnosis,
+            'reasoning_trace': reasoning_trace,
+            'reasoning_steps': len(reasoning_trace),
+            'reasoning_successful': bool(matched_diagnosis),
+            'category_used': category
+        }
+    
+    def create_stage4_initial_prompt(self, chosen_suspicion: str, category: str, 
+                                   patient_summary: str, flowchart_knowledge: Dict) -> str:
+        """Create prompt for Stage 4 initial reasoning that builds on Stage 3 choice"""
+        
+        prompt = f"""You are a medical expert in Stage 4 of progressive diagnostic reasoning. In Stage 3, you chose "{chosen_suspicion}" as the most likely diagnosis based on the complete clinical information.
+
+**Stage 3 Choice:** {chosen_suspicion}
+**Diagnostic Category:** {category}
+
+**Complete Patient Clinical Information:**
+{patient_summary}
+
+**Relevant Medical Knowledge for {category}:**"""
+
+        # Add flowchart knowledge
+        if flowchart_knowledge:
+            for knowledge_key, knowledge_content in flowchart_knowledge.items():
+                if isinstance(knowledge_content, dict):
+                    prompt += f"\n**{knowledge_key}:**\n"
+                    for sub_key, sub_content in knowledge_content.items():
+                        prompt += f"• {sub_key}: {sub_content}\n"
+                elif isinstance(knowledge_content, str):
+                    prompt += f"\n**{knowledge_key}:**\n{knowledge_content}\n"
+        
+        prompt += f"""
+
+**Task:** Build on your Stage 3 choice of "{chosen_suspicion}" by using the medical knowledge above to:
+1. Confirm or refine your diagnostic thinking
+2. Identify the most specific diagnosis within the {category} category
+3. Explain how the clinical findings support your final diagnosis
+
+**Instructions:**
+• Start with your Stage 3 choice of "{chosen_suspicion}" as the foundation
+• Use the clinical information to support or refine this choice
+• Apply the {category} medical knowledge to reach a specific final diagnosis
+• Provide detailed medical reasoning for your final diagnosis
+
+**Format:**
+**BUILDING ON STAGE 3:** [Explain how clinical findings support your choice of {chosen_suspicion}]
+**REFINED ANALYSIS:** [Apply medical knowledge to refine the diagnosis]
+**FINAL DIAGNOSIS:** [Most specific diagnosis name]
+**REASONING:** [Complete medical reasoning for the final diagnosis]
+
+**Stage 4 Analysis:**"""
+
+        return prompt
+    
+    def parse_stage4_initial_response(self, response: str, flowchart_structure: Dict) -> Dict:
+        """Parse Stage 4 initial response to extract next steps"""
+        
+        import re
+        
+        result = {}
+        
+        # Try to extract final diagnosis
+        diagnosis_match = re.search(r'FINAL DIAGNOSIS:\s*(.+?)(?=\n\*\*|\n\n|\Z)', response, re.IGNORECASE | re.DOTALL)
+        if diagnosis_match:
+            diagnosis = diagnosis_match.group(1).strip()
+            # Clean up markdown formatting
+            diagnosis = re.sub(r'^\*+', '', diagnosis)  # Remove leading asterisks
+            diagnosis = re.sub(r'\*+$', '', diagnosis)  # Remove trailing asterisks
+            diagnosis = diagnosis.strip()
+            result['final_diagnosis'] = diagnosis
+        
+        # Extract reasoning
+        reasoning_match = re.search(r'REASONING:\s*(.+?)(?=\n\*\*|\Z)', response, re.IGNORECASE | re.DOTALL)
+        if reasoning_match:
+            reasoning = reasoning_match.group(1).strip()
+            # Clean up markdown formatting
+            reasoning = re.sub(r'^\*+', '', reasoning)
+            reasoning = re.sub(r'\*+$', '', reasoning)
+            reasoning = reasoning.strip()
+            result['reasoning'] = reasoning
+        
+        # Determine current node (use final diagnosis if available)
+        if result.get('final_diagnosis'):
+            result['current_node'] = result['final_diagnosis']
+        else:
+            # Fallback to extracting from response
+            result['current_node'] = 'Suspected Diagnosis'
+        
+        return result
+    
+    def create_progressive_step_prompt(self, step: int, current_node: str, children: List[str], 
+                                     patient_summary: str, previous_reasoning: str) -> str:
+        """Create prompt for progressive reasoning steps that build on previous reasoning"""
+        
+        prompt = f"""You are continuing progressive diagnostic reasoning in Step {step}.
+
+**Previous Reasoning:**
+{previous_reasoning}
+
+**Current Diagnostic Consideration:** {current_node}
+
+**Complete Patient Clinical Information:**
+{patient_summary}
+
+**Available Next Steps:**"""
+        
+        for i, child in enumerate(children, 1):
+            prompt += f"\n{i}. {child}"
+        
+        prompt += f"""
+
+**Task:** Based on your previous reasoning and the complete clinical information, choose the most appropriate next step.
+
+**Instructions:**
+• Build on your previous reasoning above
+• Compare each option against the patient's clinical findings
+• Choose the option most consistent with the evidence
+• Provide detailed medical reasoning for your choice
+
+**Format:**
+**EVIDENCE MATCHING:** [How patient findings match each option]
+**COMPARATIVE ANALYSIS:** [Why chosen option is better than alternatives]
+**CHOSEN OPTION:** [Number] - [Option name]
+**RATIONALE:** [Complete reasoning for this choice]
+
+**Step {step} Analysis:**"""
+
+        return prompt
     
     def map_suspicion_to_category(self, suspicion: str) -> str:
         """Map a specific suspicion to a disease category for flowchart navigation"""
