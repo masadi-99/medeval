@@ -1296,12 +1296,21 @@ Answer:"""
         
         current_node = root_nodes[0]  # Start with first root node
         
+        # CRITICAL FIX: Replace hardcoded "starting" message with actual LLM reasoning
+        # The LLM should analyze clinical evidence against flowchart knowledge to justify category selection
+        initial_reasoning_prompt = self.create_initial_reasoning_prompt(
+            patient_summary, current_category, flowcharts[current_category]['knowledge'], current_node
+        )
+        initial_reasoning_result = await self.query_llm_async(initial_reasoning_prompt, f"initial_reasoning", max_tokens=800)
+        
         reasoning_trace.append({
             'step': current_step,
             'category': current_category,
             'current_node': current_node,
-            'action': 'start',
-            'response': f"Starting with {current_category} -> {current_node}"
+            'action': 'initial_reasoning',
+            'prompt': initial_reasoning_prompt,
+            'response': initial_reasoning_result['response'] if initial_reasoning_result['success'] else "",
+            'reasoning_type': 'clinical_evidence_analysis'
         })
         
         # Iterative reasoning through the flowchart
@@ -2942,3 +2951,45 @@ Now with complete clinical information available, choose your most likely diseas
                     performed_tests.add('glucose')
         
         return list(performed_tests)
+    
+    def create_initial_reasoning_prompt(self, patient_summary: str, category: str, 
+                                      flowchart_knowledge: Dict, current_node: str) -> str:
+        """Create prompt for initial reasoning step that analyzes clinical evidence against flowchart knowledge"""
+        
+        prompt = f"""You are a medical expert analyzing clinical evidence to justify a diagnostic category selection.
+
+**Selected Diagnostic Category:** {category}
+**Current Diagnostic Consideration:** {current_node}
+
+**Complete Patient Clinical Information:**
+{patient_summary}
+
+**Relevant Medical Knowledge for {category}:**
+"""
+
+        # Add flowchart knowledge for this category
+        if flowchart_knowledge:
+            for knowledge_key, knowledge_content in flowchart_knowledge.items():
+                if isinstance(knowledge_content, dict):
+                    prompt += f"\n**{knowledge_key}:**\n"
+                    for sub_key, sub_content in knowledge_content.items():
+                        prompt += f"• {sub_key}: {sub_content}\n"
+                elif isinstance(knowledge_content, str):
+                    prompt += f"\n**{knowledge_key}:**\n{knowledge_content}\n"
+        
+        prompt += f"""
+
+**Task:** Analyze the patient's clinical information against the medical knowledge above to justify why {category} is the appropriate diagnostic category to pursue.
+
+**Instructions:**
+• Compare patient's symptoms/signs/risk factors with the {category} criteria above
+• Identify specific clinical findings that support or contraindicate {category}
+• Explain which elements of the patient presentation match the typical {category} profile
+• Consider the laboratory/imaging results in the context of {category}
+• Provide medical reasoning for why {category} should be explored further
+
+**Analysis:**
+Based on the clinical evidence, explain why {category} is the most appropriate diagnostic pathway for this patient."""
+
+        return prompt
+    
