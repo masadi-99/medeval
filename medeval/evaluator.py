@@ -399,6 +399,12 @@ Answer:"""
                     print(f"  Missed: {test_overlap_metrics['missed_tests_list']}")
                 print(f"Final Diagnosis: '{predicted}'")
                 print(f"Ground Truth: '{ground_truth}'")
+                # Add correctness evaluation
+                if self.use_llm_judge:
+                    print(f"LLM Judge Decision: {'CORRECT' if correct else 'INCORRECT'}")
+                else:
+                    print(f"Exact Match: {'CORRECT' if correct else 'INCORRECT'}")
+                print("-" * 50)
                 print()
         
         elif iterative_reasoning:
@@ -497,15 +503,12 @@ Answer:"""
         # Normalize and match prediction
         matched_prediction = self.find_best_match(predicted)
         
-        # Determine correctness
-        if self.use_llm_judge:
+        # Determine correctness (use sync version for now, could optimize later)
+        if self.use_llm_judge and predicted:
+            # For now, use sync version - could make this async too
             correct = self.llm_judge_evaluation(matched_prediction, ground_truth)
-            if self.show_responses:
-                print(f"LLM Judge Decision: {'CORRECT' if correct else 'INCORRECT'}")
         else:
             correct = ground_truth == matched_prediction
-            if self.show_responses:
-                print(f"Exact Match: {'CORRECT' if correct else 'INCORRECT'}")
         
         if self.show_responses:
             print("-" * 50)
@@ -1201,6 +1204,7 @@ Answer:"""
         
         prompt += f"Patient Information:\n{patient_summary}\n\n"
         
+        
         prompt += "Available categories to explore:\n"
         for i, category in enumerate(categories, 1):
             prompt += f"{i}. {category}\n"
@@ -1438,6 +1442,41 @@ Answer:"""
             # Calculate test overlap metrics for progressive reasoning
             test_overlap_metrics = self.calculate_test_overlap_metrics(recommended_tests, sample)
             
+            # CRITICAL FIX: Calculate correctness early for show_responses
+            matched_prediction = self.find_best_match(predicted)
+            if self.use_llm_judge and predicted:
+                correct = self.llm_judge_evaluation(matched_prediction, ground_truth)
+            else:
+                correct = ground_truth == matched_prediction
+            
+            # CRITICAL FIX: Add show_responses functionality for concurrent progressive reasoning
+            if self.show_responses:
+                print(f"Sample: {sample_path}")
+                print(f"Disease Category: {disease_category}")
+                print(f"Progressive Reasoning Workflow (Async):")
+                print(f"  Stage 0 - Initial Suspicions: {suspicions_generated}")
+                print(f"  Stage 1 - Recommended Tests: {recommended_tests[:100]}...")
+                print(f"  Stage 2 - Chosen Suspicion: {chosen_suspicion}")
+                print(f"  Stage 3 - Reasoning Steps: {reasoning_steps}")
+                print(f"Test Overlap Metrics:")
+                print(f"  Precision: {test_overlap_metrics['test_overlap_precision']:.3f} (avoiding unnecessary tests)")
+                print(f"  Recall: {test_overlap_metrics['test_overlap_recall']:.3f} (not missing necessary tests)")
+                print(f"  F1-Score: {test_overlap_metrics['test_overlap_f1']:.3f}")
+                print(f"  Recommended: {test_overlap_metrics['tests_recommended_count']}, Actual: {test_overlap_metrics['tests_actual_count']}, Overlap: {test_overlap_metrics['tests_overlap_count']}")
+                if test_overlap_metrics['unnecessary_tests_list']:
+                    print(f"  Unnecessary: {test_overlap_metrics['unnecessary_tests_list']}")
+                if test_overlap_metrics['missed_tests_list']:
+                    print(f"  Missed: {test_overlap_metrics['missed_tests_list']}")
+                print(f"Final Diagnosis: '{predicted}'")
+                print(f"Ground Truth: '{ground_truth}'")
+                # Add correctness evaluation
+                if self.use_llm_judge:
+                    print(f"LLM Judge Decision: {'CORRECT' if correct else 'INCORRECT'}")
+                else:
+                    print(f"Exact Match: {'CORRECT' if correct else 'INCORRECT'}")
+                print("-" * 50)
+                print()
+        
         elif iterative_reasoning:
             # Step 1: Category selection
             category_prompt = self.create_category_selection_prompt(sample, num_inputs, num_categories)
@@ -1540,6 +1579,19 @@ Answer:"""
             correct = self.llm_judge_evaluation(matched_prediction, ground_truth)
         else:
             correct = ground_truth == matched_prediction
+        
+        # CRITICAL FIX: Add show_responses for final evaluation in async path
+        if self.show_responses and not progressive_reasoning:  # Progressive reasoning already shown above
+            print(f"Sample: {sample_path}")
+            print(f"Disease Category: {disease_category}")
+            print(f"Raw LLM Response: '{predicted}'")
+            print(f"Ground Truth: '{ground_truth}'")
+            if self.use_llm_judge:
+                print(f"LLM Judge Decision: {'CORRECT' if correct else 'INCORRECT'}")
+            else:
+                print(f"Exact Match: {'CORRECT' if correct else 'INCORRECT'}")
+            print("-" * 50)
+            print()
         
         # Build result
         result = {
