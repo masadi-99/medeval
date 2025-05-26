@@ -107,4 +107,7 @@ llm_diagnostic_evaluator.py
 extract_diagnoses.py
 show_sample.py
 samples.rar
-diagnostic_kg.rar 
+diagnostic_kg.rar
+
+# API keys (keep private)
+openai_api_key.txt 
