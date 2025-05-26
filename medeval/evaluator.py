@@ -1623,12 +1623,14 @@ Answer:"""
         # Calculate metrics (same as sync version)
         return self._calculate_metrics(results, num_inputs, provide_diagnosis_list, 
                                      two_step_reasoning, iterative_reasoning, 
-                                     num_categories, max_reasoning_steps)
+                                     num_categories, max_reasoning_steps,
+                                     progressive_reasoning, num_suspicions)
     
     def _calculate_metrics(self, results: List[Dict], num_inputs: int, 
                           provide_diagnosis_list: bool, two_step_reasoning: bool,
                           iterative_reasoning: bool, num_categories: int, 
-                          max_reasoning_steps: int) -> Dict:
+                          max_reasoning_steps: int, progressive_reasoning: bool = False,
+                          num_suspicions: int = 3) -> Dict:
         """Helper method to calculate metrics from results"""
         
         # Filter out failed results for metrics calculation
