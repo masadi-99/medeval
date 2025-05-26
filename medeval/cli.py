@@ -84,6 +84,13 @@ def main():
     parser.add_argument('--max-concurrent', type=int, default=10,
                        help='Maximum number of concurrent API calls (default: 10)')
     
+    # LLM-based test overlap arguments
+    parser.add_argument(
+        '--llm-test-overlap',
+        action='store_true',
+        help='Use LLM for test overlap evaluation (more accurate but slower)'
+    )
+    
     args = parser.parse_args()
     
     # Handle thinking mode
@@ -153,7 +160,8 @@ def main():
             huggingface_token=huggingface_token,
             device=args.device,
             torch_dtype=args.torch_dtype,
-            thinking_mode=thinking_mode
+            thinking_mode=thinking_mode,
+            llm_test_overlap=args.llm_test_overlap
         )
         
         if args.concurrent:

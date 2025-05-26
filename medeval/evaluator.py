@@ -81,7 +81,7 @@ class DiagnosticEvaluator:
                  # New parameters for model provider system
                  provider: str = "auto", huggingface_token: str = None,
                  device: str = "auto", torch_dtype: str = "auto",
-                 thinking_mode: bool = True):
+                 thinking_mode: bool = True, llm_test_overlap: bool = False):
         """
         Initialize the diagnostic evaluator
         
@@ -98,6 +98,7 @@ class DiagnosticEvaluator:
             device: Device for local models ("auto", "cpu", "cuda", etc.)
             torch_dtype: Torch dtype for local models ("auto", "float16", "bfloat16")
             thinking_mode: Enable thinking mode for compatible models (like Qwen3)
+            llm_test_overlap: Whether to use LLM for test overlap calculation
         """
         self.flowchart_dir = flowchart_dir
         self.samples_dir = samples_dir
@@ -106,6 +107,7 @@ class DiagnosticEvaluator:
         self.use_llm_judge = use_llm_judge
         self.show_responses = show_responses
         self.max_concurrent = max_concurrent
+        self.llm_test_overlap = llm_test_overlap
         self.rate_limiter = RateLimiter()
         
         # Determine model configuration
@@ -2471,9 +2473,22 @@ Now with complete clinical information available, choose your most likely diseas
     def calculate_test_overlap_metrics(self, recommended_tests: str, sample: Dict) -> Dict:
         """Calculate overlap metrics between recommended and actual tests"""
         
+        # Use LLM-based approach if enabled, otherwise use regex-based approach
+        if self.llm_test_overlap:
+            try:
+                return self.calculate_test_overlap_metrics_llm(recommended_tests, sample)
+            except Exception as e:
+                print(f"Error in LLM-based test overlap calculation, falling back to original method: {e}")
+                return self.calculate_test_overlap_metrics_original(recommended_tests, sample)
+        else:
+            return self.calculate_test_overlap_metrics_original(recommended_tests, sample)
+    
+    def calculate_test_overlap_metrics_original(self, recommended_tests: str, sample: Dict) -> Dict:
+        """Calculate overlap metrics between recommended and actual tests (original regex-based method)"""
+        
         # Extract test lists
-        recommended = set(self.extract_tests_from_recommendations(recommended_tests))
-        actual = set(self.extract_tests_from_clinical_data(sample))
+        recommended = set(self.extract_tests_from_recommendations_original(recommended_tests))
+        actual = set(self.extract_tests_from_clinical_data_original(sample))
         
         # Remove empty strings
         recommended = {t for t in recommended if t.strip()}
@@ -2519,3 +2534,384 @@ Now with complete clinical information available, choose your most likely diseas
             'unnecessary_tests_list': list(unnecessary_tests),
             'missed_tests_list': list(missed_tests)
         }
+    
+    def extract_tests_from_recommendations_llm(self, recommended_tests: str) -> List[str]:
+        """Extract individual test names from LLM recommendations using LLM as judge"""
+        
+        if not recommended_tests.strip():
+            return []
+        
+        extraction_prompt = f"""You are a medical expert tasked with extracting specific test names from clinical recommendations.
+
+**Clinical Recommendations:**
+{recommended_tests}
+
+**Task:** Extract all specific medical tests, laboratory tests, imaging studies, and physical examination components mentioned in the recommendations above.
+
+**Instructions:**
+• List each test as a separate item
+• Use standard medical terminology (e.g., "Complete Blood Count" not "blood work")
+• Include both specific tests (e.g., "Troponin I") and general categories (e.g., "Cardiac Enzymes")
+• Include physical exam components (e.g., "Blood Pressure", "Heart Rate")
+• Include imaging studies (e.g., "Chest X-ray", "ECG")
+• Do not include general phrases like "monitor" or "assess"
+
+**Format:** List one test per line, like:
+- Complete Blood Count
+- Electrocardiogram
+- Chest X-ray
+- Blood Pressure
+- Troponin
+
+**Tests Mentioned:**"""
+        
+        try:
+            response = self.query_llm(extraction_prompt, max_tokens=300)
+            
+            # Parse the response to extract test names
+            tests = []
+            lines = response.split('\n')
+            for line in lines:
+                line = line.strip()
+                # Remove bullet points, dashes, numbers
+                clean_line = re.sub(r'^[-•\*\d+\.]\s*', '', line).strip()
+                if clean_line and len(clean_line) > 2 and not clean_line.lower().startswith('test'):
+                    tests.append(clean_line)
+            
+            return tests[:15]  # Limit to reasonable number
+            
+        except Exception as e:
+            print(f"Error in LLM test extraction: {e}")
+            # Fallback to original method
+            return self.extract_tests_from_recommendations_original(recommended_tests)
+    
+    def extract_tests_from_clinical_data_llm(self, sample: Dict) -> List[str]:
+        """Extract test names from actual clinical data using LLM as judge"""
+        
+        # Combine physical exam and lab results
+        clinical_text = ""
+        if 'input5' in sample:  # Physical Examination
+            clinical_text += f"Physical Examination: {sample['input5']}\n\n"
+        if 'input6' in sample:  # Laboratory Results
+            clinical_text += f"Laboratory Results: {sample['input6']}\n\n"
+        
+        if not clinical_text.strip():
+            return []
+        
+        extraction_prompt = f"""You are a medical expert tasked with identifying which specific tests were actually performed based on clinical documentation.
+
+**Clinical Documentation:**
+{clinical_text}
+
+**Task:** Identify all medical tests, laboratory tests, imaging studies, and physical examination components that were actually performed or measured, as evidenced by the documentation above.
+
+**Instructions:**
+• Only include tests that were clearly performed (have results, measurements, or findings)
+• Use standard medical terminology
+• Include physical exam components with measurements (e.g., "Blood Pressure", "Heart Rate")
+• Include lab tests with values (e.g., "Complete Blood Count", "Troponin")
+• Include imaging studies mentioned (e.g., "Chest X-ray", "ECG")
+• Do not include tests that were only planned or recommended
+
+**Format:** List one test per line, like:
+- Blood Pressure
+- Complete Blood Count
+- Electrocardiogram
+- Chest X-ray
+
+**Tests Actually Performed:**"""
+        
+        try:
+            response = self.query_llm(extraction_prompt, max_tokens=300)
+            
+            # Parse the response to extract test names
+            tests = []
+            lines = response.split('\n')
+            for line in lines:
+                line = line.strip()
+                # Remove bullet points, dashes, numbers
+                clean_line = re.sub(r'^[-•\*\d+\.]\s*', '', line).strip()
+                if clean_line and len(clean_line) > 2 and not clean_line.lower().startswith('test'):
+                    tests.append(clean_line)
+            
+            return tests[:15]  # Limit to reasonable number
+            
+        except Exception as e:
+            print(f"Error in LLM clinical test extraction: {e}")
+            # Fallback to original method
+            return self.extract_tests_from_clinical_data_original(sample)
+    
+    def judge_test_equivalence_llm(self, recommended_test: str, actual_test: str) -> bool:
+        """Use LLM to judge if recommended test and actual test are equivalent"""
+        
+        judge_prompt = f"""You are a medical expert evaluating whether two medical tests refer to the same or equivalent procedures.
+
+**Recommended Test:** "{recommended_test}"
+**Actual Test:** "{actual_test}"
+
+**Task:** Determine if these two tests are the same, equivalent, or measure the same thing.
+
+**Consider equivalent:**
+• Different names for the same test (e.g., "ECG" and "Electrocardiogram")
+• General category and specific test (e.g., "Cardiac Enzymes" and "Troponin I")
+• Different phrasing for same measurement (e.g., "Blood Pressure" and "BP")
+• Synonymous medical terms (e.g., "CBC" and "Complete Blood Count")
+
+**Consider NOT equivalent:**
+• Tests that measure completely different things
+• Different body systems or organs
+
+**Question:** Are these two tests equivalent or the same?
+
+**Response:** Answer ONLY "YES" if they are equivalent/same, or "NO" if they are different.
+
+**Answer:**"""
+        
+        try:
+            response = self.query_llm(judge_prompt, max_tokens=10, temperature=0.0)
+            return response.strip().upper() == "YES"
+        except Exception as e:
+            print(f"Error in LLM test equivalence judging: {e}")
+            # Fallback to simple string matching
+            return recommended_test.lower() in actual_test.lower() or actual_test.lower() in recommended_test.lower()
+    
+    def calculate_test_overlap_metrics_llm(self, recommended_tests: str, sample: Dict) -> Dict:
+        """Calculate overlap metrics between recommended and actual tests using LLM judge"""
+        
+        # Extract test lists using LLM
+        recommended = self.extract_tests_from_recommendations_llm(recommended_tests)
+        actual = self.extract_tests_from_clinical_data_llm(sample)
+        
+        if not recommended and not actual:
+            # Both empty
+            return {
+                'test_overlap_precision': 1.0,
+                'test_overlap_recall': 1.0,
+                'test_overlap_f1': 1.0,
+                'test_overlap_jaccard': 1.0,
+                'tests_recommended_count': 0,
+                'tests_actual_count': 0,
+                'tests_overlap_count': 0,
+                'unnecessary_tests_count': 0,
+                'missed_tests_count': 0,
+                'unnecessary_tests_rate': 0.0,
+                'missed_tests_rate': 0.0,
+                'recommended_tests_list': [],
+                'actual_tests_list': [],
+                'overlap_tests_list': [],
+                'unnecessary_tests_list': [],
+                'missed_tests_list': []
+            }
+        
+        # Use LLM to judge equivalence for each pair
+        overlap_tests = []
+        unnecessary_tests = []
+        missed_tests = []
+        
+        # Find overlapping tests
+        for rec_test in recommended:
+            found_match = False
+            for act_test in actual:
+                if self.judge_test_equivalence_llm(rec_test, act_test):
+                    overlap_tests.append(f"{rec_test} ≈ {act_test}")
+                    found_match = True
+                    break
+            if not found_match:
+                unnecessary_tests.append(rec_test)
+        
+        # Find missed tests (in actual but not recommended)
+        for act_test in actual:
+            found_match = False
+            for rec_test in recommended:
+                if self.judge_test_equivalence_llm(rec_test, act_test):
+                    found_match = True
+                    break
+            if not found_match:
+                missed_tests.append(act_test)
+        
+        # Calculate metrics
+        num_recommended = len(recommended)
+        num_actual = len(actual)
+        num_overlap = len(overlap_tests)
+        
+        # Calculate metrics (handle division by zero)
+        precision = num_overlap / num_recommended if num_recommended > 0 else 0
+        recall = num_overlap / num_actual if num_actual > 0 else 0
+        f1_score = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+        
+        # For Jaccard, we need unique count (since overlap_tests has pairs)
+        total_unique_tests = num_recommended + num_actual - num_overlap
+        jaccard_index = num_overlap / total_unique_tests if total_unique_tests > 0 else 0
+        
+        unnecessary_rate = len(unnecessary_tests) / num_recommended if num_recommended > 0 else 0
+        missed_rate = len(missed_tests) / num_actual if num_actual > 0 else 0
+        
+        return {
+            'test_overlap_precision': precision,
+            'test_overlap_recall': recall,
+            'test_overlap_f1': f1_score,
+            'test_overlap_jaccard': jaccard_index,
+            'tests_recommended_count': num_recommended,
+            'tests_actual_count': num_actual,
+            'tests_overlap_count': num_overlap,
+            'unnecessary_tests_count': len(unnecessary_tests),
+            'missed_tests_count': len(missed_tests),
+            'unnecessary_tests_rate': unnecessary_rate,
+            'missed_tests_rate': missed_rate,
+            'recommended_tests_list': recommended,
+            'actual_tests_list': actual,
+            'overlap_tests_list': overlap_tests,
+            'unnecessary_tests_list': unnecessary_tests,
+            'missed_tests_list': missed_tests
+        }
+    
+    def extract_tests_from_recommendations_original(self, recommended_tests: str) -> List[str]:
+        """Extract individual test names from LLM recommendations"""
+        
+        # Common test abbreviations and their full names
+        test_mappings = {
+            'cbc': 'complete blood count',
+            'bmp': 'basic metabolic panel',
+            'cmp': 'comprehensive metabolic panel',
+            'lipid panel': 'lipid profile',
+            'liver function': 'liver function tests',
+            'lft': 'liver function tests',
+            'kidney function': 'renal function tests',
+            'rft': 'renal function tests',
+            'cardiac enzymes': 'troponin',
+            'troponins': 'troponin',
+            'ekg': 'electrocardiogram',
+            'ecg': 'electrocardiogram',
+            'chest x-ray': 'chest xray',
+            'cxr': 'chest xray',
+            'ct scan': 'ct',
+            'mri scan': 'mri',
+            'urinalysis': 'urine analysis',
+            'ua': 'urine analysis',
+            'blood pressure': 'bp',
+            'heart rate': 'pulse',
+            'respiratory rate': 'breathing',
+            'temperature': 'temp',
+            'oxygen saturation': 'spo2',
+            'pulse oximetry': 'spo2'
+        }
+        
+        import re
+        
+        # Convert to lowercase for processing
+        text = recommended_tests.lower()
+        
+        # Extract potential test names
+        extracted_tests = set()
+        
+        # Look for common patterns
+        patterns = [
+            r'\b(?:order|obtain|check|perform|do)\s+([a-zA-Z0-9\s]+?)(?:\s+to|\s+for|\s+in|\.|\,|$)',
+            r'\b(cbc|bmp|cmp|troponin|ekg|ecg|chest x-ray|cxr|ct|mri|urinalysis|ua)\b',
+            r'\b(complete blood count|basic metabolic|comprehensive metabolic|liver function|cardiac enzymes)\b',
+            r'\b(blood pressure|heart rate|respiratory rate|temperature|pulse|breathing)\b',
+            r'\b([a-zA-Z]+\s+(?:levels?|test|exam|study|scan|panel|profile|analysis))\b',
+            r'\b(?:physical exam|examination):\s*([a-zA-Z0-9\s,]+?)(?:\n|$)',
+            r'\b(?:lab|laboratory):\s*([a-zA-Z0-9\s,]+?)(?:\n|$)',
+            r'\b(?:imaging|radiology):\s*([a-zA-Z0-9\s,]+?)(?:\n|$)'
+        ]
+        
+        for pattern in patterns:
+            matches = re.finditer(pattern, text)
+            for match in matches:
+                test_name = match.group(1).strip()
+                if test_name and len(test_name) > 2:
+                    # Clean up the test name
+                    test_name = re.sub(r'[^\w\s]', '', test_name)
+                    test_name = ' '.join(test_name.split())
+                    
+                    # Apply mappings
+                    normalized = test_mappings.get(test_name, test_name)
+                    extracted_tests.add(normalized)
+        
+        # Also look for bullet points and numbered lists
+        lines = text.split('\n')
+        for line in lines:
+            line = line.strip()
+            if re.match(r'^[•\-\*\d+\.]\s*', line):
+                # Remove bullet/number prefix
+                clean_line = re.sub(r'^[•\-\*\d+\.]\s*', '', line)
+                clean_line = re.sub(r'[^\w\s]', '', clean_line)
+                clean_line = ' '.join(clean_line.split())
+                
+                if clean_line and len(clean_line) > 2:
+                    # Apply mappings
+                    normalized = test_mappings.get(clean_line, clean_line)
+                    extracted_tests.add(normalized)
+        
+        return list(extracted_tests)
+    
+    def extract_tests_from_clinical_data_original(self, sample: Dict) -> List[str]:
+        """Extract test names from actual clinical data (inputs 5 and 6)"""
+        
+        # Test indicators in clinical text
+        test_indicators = {
+            'complete blood count': ['cbc', 'complete blood count', 'blood count'],
+            'troponin': ['troponin', 'cardiac enzymes', 'troponin i', 'troponin t'],
+            'electrocardiogram': ['ekg', 'ecg', 'electrocardiogram'],
+            'chest xray': ['chest x-ray', 'cxr', 'chest xray', 'chest radiograph'],
+            'ct': ['ct scan', 'computed tomography', 'ct chest', 'ct abdomen'],
+            'mri': ['mri', 'magnetic resonance', 'mri brain'],
+            'urine analysis': ['urinalysis', 'ua', 'urine analysis', 'urine test'],
+            'liver function tests': ['lft', 'liver function', 'alt', 'ast', 'bilirubin'],
+            'renal function tests': ['creatinine', 'bun', 'kidney function', 'renal function'],
+            'lipid profile': ['lipid panel', 'cholesterol', 'triglycerides', 'hdl', 'ldl'],
+            'glucose': ['glucose', 'blood sugar', 'blood glucose'],
+            'bp': ['blood pressure', 'bp', 'hypertension', 'hypotension'],
+            'pulse': ['heart rate', 'pulse', 'hr'],
+            'breathing': ['respiratory rate', 'rr', 'breathing'],
+            'temp': ['temperature', 'fever', 'temp'],
+            'spo2': ['oxygen saturation', 'spo2', 'pulse oximetry', 'o2 sat']
+        }
+        
+        import re
+        
+        # Combine physical exam and lab results
+        clinical_text = ""
+        if 'input5' in sample:  # Physical Examination
+            clinical_text += sample['input5'].lower() + " "
+        if 'input6' in sample:  # Laboratory Results
+            clinical_text += sample['input6'].lower() + " "
+        
+        # Find tests that were actually performed
+        performed_tests = set()
+        
+        for test_name, indicators in test_indicators.items():
+            for indicator in indicators:
+                # Look for the indicator in the clinical text
+                if re.search(r'\b' + re.escape(indicator) + r'\b', clinical_text):
+                    performed_tests.add(test_name)
+                    break  # Found one indicator for this test
+        
+        # Look for numerical values that indicate lab results
+        lab_patterns = [
+            r'\b(?:wbc|white blood cell)\s*:?\s*[\d\.,]+',
+            r'\b(?:hgb|hemoglobin)\s*:?\s*[\d\.,]+',
+            r'\b(?:plt|platelet)\s*:?\s*[\d\.,]+',
+            r'\b(?:sodium|na)\s*:?\s*[\d\.,]+',
+            r'\b(?:potassium|k)\s*:?\s*[\d\.,]+',
+            r'\b(?:chloride|cl)\s*:?\s*[\d\.,]+',
+            r'\b(?:co2|bicarbonate)\s*:?\s*[\d\.,]+',
+            r'\b(?:bun|urea)\s*:?\s*[\d\.,]+',
+            r'\b(?:creatinine|cr)\s*:?\s*[\d\.,]+',
+            r'\b(?:glucose|glu)\s*:?\s*[\d\.,]+',
+        ]
+        
+        for pattern in lab_patterns:
+            if re.search(pattern, clinical_text):
+                # Determine which test this result belongs to
+                if 'wbc' in pattern or 'hemoglobin' in pattern or 'platelet' in pattern:
+                    performed_tests.add('complete blood count')
+                elif 'sodium' in pattern or 'potassium' in pattern or 'chloride' in pattern or 'co2' in pattern:
+                    performed_tests.add('basic metabolic panel')
+                elif 'bun' in pattern or 'creatinine' in pattern:
+                    performed_tests.add('renal function tests')
+                elif 'glucose' in pattern:
+                    performed_tests.add('glucose')
+        
+        return list(performed_tests)
