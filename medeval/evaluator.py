@@ -1870,19 +1870,22 @@ For your chosen categories, what physical exam and lab/imaging tests would be mo
 
 Now with complete clinical information available, choose your most likely disease category and then provide a specific diagnosis.
 
-**Available Specific Diagnoses:**
-{', '.join(self.possible_diagnoses[:50])}...
+**Possible Primary Discharge Diagnoses:**"""
+        for i, diagnosis in enumerate(self.possible_diagnoses, 1):
+            combined_prompt += f"\n{i}. {diagnosis}"
+        
+        combined_prompt += f"""
 
 **INSTRUCTIONS:**
 • Choose categories from the disease categories list above
-• Choose final diagnosis from the specific diagnoses list
+• IMPORTANT: Your final diagnosis MUST be selected from the possible diagnoses list above
 • Use the complete clinical information to make your final diagnosis
 
 **FORMAT:**
 **INITIAL CATEGORY SUSPICIONS:** [List {num_suspicions} categories]
 **RECOMMENDED TESTS:** [Brief list of key tests]
 **CHOSEN CATEGORY:** [Best category from suspicions]
-**FINAL DIAGNOSIS:** [Specific diagnosis name from possible diagnoses]
+**FINAL DIAGNOSIS:** [Exact diagnosis name from the possible diagnoses list above]
 **REASONING:** [Brief explanation for final diagnosis]"""
         
         # Single API call
@@ -2461,23 +2464,31 @@ Now with complete clinical information available, choose your most likely diseas
                 elif isinstance(knowledge_content, str):
                     prompt += f"\n**{knowledge_key}:**\n{knowledge_content}\n"
         
+        # CRITICAL FIX: Add the possible diagnoses list to constrain LLM choices
+        prompt += f"""
+
+**Possible Primary Discharge Diagnoses:**"""
+        for i, diagnosis in enumerate(self.possible_diagnoses, 1):
+            prompt += f"\n{i}. {diagnosis}"
+        
         prompt += f"""
 
 **Task:** Build on your Stage 3 choice of "{chosen_suspicion}" by using the medical knowledge above to:
 1. Confirm or refine your diagnostic thinking
-2. Identify the most specific diagnosis within the {category} category
+2. Identify the most specific diagnosis within the {category} category from the possible diagnoses list
 3. Explain how the clinical findings support your final diagnosis
 
 **Instructions:**
 • Start with your Stage 3 choice of "{chosen_suspicion}" as the foundation
 • Use the clinical information to support or refine this choice
 • Apply the {category} medical knowledge to reach a specific final diagnosis
+• IMPORTANT: Your final diagnosis MUST be selected from the possible diagnoses list above
 • Provide detailed medical reasoning for your final diagnosis
 
 **Format:**
 **BUILDING ON STAGE 3:** [Explain how clinical findings support your choice of {chosen_suspicion}]
 **REFINED ANALYSIS:** [Apply medical knowledge to refine the diagnosis]
-**FINAL DIAGNOSIS:** [Most specific diagnosis name]
+**FINAL DIAGNOSIS:** [Exact diagnosis name from the possible diagnoses list above]
 **REASONING:** [Complete medical reasoning for the final diagnosis]
 
 **Stage 4 Analysis:**"""
