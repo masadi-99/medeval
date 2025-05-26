@@ -333,7 +333,7 @@ Answer:"""
                        provide_diagnosis_list: bool, two_step_reasoning: bool = False,
                        num_categories: int = 3, iterative_reasoning: bool = False,
                        max_reasoning_steps: int = 5, progressive_reasoning: bool = False,
-                       num_suspicions: int = 3) -> Dict:
+                       num_suspicions: int = 3, progressive_fast_mode: bool = False) -> Dict:
         """
         Evaluate a single sample
         
@@ -347,6 +347,7 @@ Answer:"""
             max_reasoning_steps: Maximum number of reasoning steps for iterative mode
             progressive_reasoning: Whether to use progressive reasoning
             num_suspicions: Number of suspicions to generate in the first stage
+            progressive_fast_mode: If True, use fast mode for progressive reasoning
         
         Returns:
             Dict with evaluation results
@@ -358,7 +359,7 @@ Answer:"""
         if progressive_reasoning:
             # Progressive reasoning: History -> Suspicions -> Tests -> Final diagnosis
             progressive_result = self.progressive_reasoning_workflow(
-                sample, num_suspicions, max_reasoning_steps
+                sample, num_suspicions, max_reasoning_steps, fast_mode=progressive_fast_mode
             )
             
             predicted = progressive_result['final_diagnosis']
@@ -425,7 +426,7 @@ Answer:"""
                     elif step.get('action') == 'final_diagnosis':
                         print(f"  Step {step['step']}: Final diagnosis - {step.get('current_node')}")
                 print(f"Final Diagnosis: '{predicted}'")
-                print(f"Ground Truth Diagnosis: '{ground_truth}'")
+                print(f"Ground Truth: '{ground_truth}'")
                 print(f"Reasoning Path Correct: {reasoning_path_correct}")
                 print()
         
@@ -591,7 +592,8 @@ Answer:"""
                         iterative_reasoning: bool = False,
                         max_reasoning_steps: int = 5,
                         progressive_reasoning: bool = False,
-                        num_suspicions: int = 3) -> Dict:
+                        num_suspicions: int = 3,
+                        progressive_fast_mode: bool = False) -> Dict:
         """
         Evaluate the entire dataset
         
@@ -606,6 +608,7 @@ Answer:"""
             max_reasoning_steps: Maximum number of reasoning steps for iterative mode
             progressive_reasoning: Whether to use progressive reasoning
             num_suspicions: Number of suspicions to generate in the first stage
+            progressive_fast_mode: If True, use fast mode for progressive reasoning
         
         Returns:
             Dict with evaluation metrics and results
@@ -657,7 +660,8 @@ Answer:"""
                 iterative_reasoning=iterative_reasoning,
                 max_reasoning_steps=max_reasoning_steps,
                 progressive_reasoning=progressive_reasoning,
-                num_suspicions=num_suspicions
+                num_suspicions=num_suspicions,
+                progressive_fast_mode=progressive_fast_mode
             )
             results.append(result)
         
@@ -1326,7 +1330,7 @@ Answer:"""
                                    provide_diagnosis_list: bool, two_step_reasoning: bool = False,
                                    num_categories: int = 3, iterative_reasoning: bool = False,
                                    max_reasoning_steps: int = 5, progressive_reasoning: bool = False,
-                                   num_suspicions: int = 3) -> Dict:
+                                   num_suspicions: int = 3, progressive_fast_mode: bool = False) -> Dict:
         """
         Async version of evaluate_sample for concurrent processing
         """
@@ -1342,7 +1346,7 @@ Answer:"""
             # For now, use synchronous approach within async function
             # Could be optimized further for concurrent API calls
             progressive_result = self.progressive_reasoning_workflow(
-                sample, num_suspicions, max_reasoning_steps
+                sample, num_suspicions, max_reasoning_steps, fast_mode=progressive_fast_mode
             )
             
             predicted = progressive_result['final_diagnosis']
@@ -1501,7 +1505,8 @@ Answer:"""
                                          iterative_reasoning: bool = False,
                                          max_reasoning_steps: int = 5,
                                          progressive_reasoning: bool = False,
-                                         num_suspicions: int = 3) -> Dict:
+                                         num_suspicions: int = 3,
+                                         progressive_fast_mode: bool = False) -> Dict:
         """
         Concurrent version of evaluate_dataset for faster processing
         """
@@ -1553,7 +1558,8 @@ Answer:"""
                     iterative_reasoning=iterative_reasoning,
                     max_reasoning_steps=max_reasoning_steps,
                     progressive_reasoning=progressive_reasoning,
-                    num_suspicions=num_suspicions
+                    num_suspicions=num_suspicions,
+                    progressive_fast_mode=progressive_fast_mode
                 )
                 tasks.append(task)
             
@@ -1725,7 +1731,7 @@ Answer:"""
         } 
 
     def progressive_reasoning_workflow(self, sample: Dict, num_suspicions: int = 3, 
-                                     max_reasoning_steps: int = 5) -> Dict:
+                                     max_reasoning_steps: int = 5, fast_mode: bool = True) -> Dict:
         """
         Progressive clinical workflow reasoning:
         Stage 1: History (inputs 1-4) -> Generate top suspicions + recommended tests
@@ -1736,10 +1742,105 @@ Answer:"""
             sample: The clinical sample data
             num_suspicions: Number of initial suspicions to generate
             max_reasoning_steps: Maximum reasoning steps in final stage
+            fast_mode: If True, combine stages for faster processing
         
         Returns:
             Dict with progressive reasoning results
         """
+        
+        if fast_mode:
+            # Fast mode: Combine stages 1-3 into a single API call
+            return self._progressive_reasoning_fast(sample, num_suspicions, max_reasoning_steps)
+        else:
+            # Standard mode: Full 4-stage workflow
+            return self._progressive_reasoning_standard(sample, num_suspicions, max_reasoning_steps)
+    
+    def _progressive_reasoning_fast(self, sample: Dict, num_suspicions: int, max_reasoning_steps: int) -> Dict:
+        """Fast progressive reasoning - combines multiple stages"""
+        
+        # Get history and full clinical information
+        history_summary = self.create_history_summary(sample)
+        full_summary = self.create_patient_data_summary(sample, 6)
+        
+        # Single combined prompt for stages 1-3
+        combined_prompt = f"""You are a medical expert following a progressive clinical workflow.
+
+**STAGE 1 - Initial Assessment (History Only):**
+{history_summary}
+
+Based on this history, generate {num_suspicions} most likely diagnostic suspicions.
+
+**STAGE 2 - Test Planning:**
+For your suspicions, what physical exam and lab/imaging tests would be most helpful?
+
+**STAGE 3 - Final Assessment (Complete Information):**
+{full_summary}
+
+Now with complete clinical information available, choose your most likely diagnosis.
+
+**INSTRUCTIONS:**
+• Use the complete clinical information to make your final diagnosis
+• Choose from these possible diagnoses: {', '.join(self.possible_diagnoses[:50])}...
+• Provide your final diagnosis as a specific medical condition
+
+**FORMAT:**
+**INITIAL SUSPICIONS:** [List {num_suspicions} suspicions]
+**RECOMMENDED TESTS:** [Brief list of key tests]
+**FINAL DIAGNOSIS:** [Specific diagnosis name from possible diagnoses]
+**REASONING:** [Brief explanation for final diagnosis]"""
+        
+        # Single API call
+        response = self.query_llm(combined_prompt, max_tokens=800)
+        
+        # Parse response
+        import re
+        
+        # Extract suspicions
+        suspicions_match = re.search(r'INITIAL SUSPICIONS:\s*(.*?)(?=\*\*RECOMMENDED TESTS:|$)', response, re.DOTALL | re.IGNORECASE)
+        suspicions_text = suspicions_match.group(1).strip() if suspicions_match else ""
+        suspicions = self._parse_suspicions_from_text(suspicions_text, num_suspicions)
+        
+        # Extract recommended tests
+        tests_match = re.search(r'RECOMMENDED TESTS:\s*(.*?)(?=\*\*FINAL DIAGNOSIS:|$)', response, re.DOTALL | re.IGNORECASE)
+        recommended_tests = tests_match.group(1).strip() if tests_match else ""
+        
+        # Extract final diagnosis
+        diagnosis_match = re.search(r'FINAL DIAGNOSIS:\s*(.*?)(?=\*\*REASONING:|$)', response, re.DOTALL | re.IGNORECASE)
+        final_diagnosis = diagnosis_match.group(1).strip() if diagnosis_match else ""
+        
+        # Extract reasoning
+        reasoning_match = re.search(r'REASONING:\s*(.*?)$', response, re.DOTALL | re.IGNORECASE)
+        reasoning = reasoning_match.group(1).strip() if reasoning_match else ""
+        
+        # Match final diagnosis against possible diagnoses
+        matched_diagnosis = self.find_best_match(final_diagnosis)
+        
+        # Create reasoning trace
+        reasoning_trace = [
+            {
+                'step': 1,
+                'action': 'combined_progressive',
+                'response': response,
+                'suspicions': suspicions,
+                'recommended_tests': recommended_tests,
+                'final_diagnosis': final_diagnosis,
+                'matched_diagnosis': matched_diagnosis,
+                'reasoning': reasoning
+            }
+        ]
+        
+        return {
+            'final_diagnosis': matched_diagnosis,
+            'reasoning_trace': reasoning_trace,
+            'reasoning_steps': 1,
+            'suspicions': suspicions,
+            'recommended_tests': recommended_tests,
+            'chosen_suspicion': final_diagnosis,  # In fast mode, this is the final diagnosis
+            'reasoning_successful': bool(matched_diagnosis)
+        }
+    
+    def _progressive_reasoning_standard(self, sample: Dict, num_suspicions: int, max_reasoning_steps: int) -> Dict:
+        """Standard progressive reasoning - full 4-stage workflow"""
         
         # Stage 1: Generate suspicions based on history only (inputs 1-4)
         history_summary = self.create_history_summary(sample)
@@ -1773,8 +1874,34 @@ Answer:"""
             'recommended_tests': recommended_tests,
             'chosen_suspicion': chosen_suspicion,
             'reasoning_successful': reasoning_result['reasoning_successful']
-        } 
-
+        }
+    
+    def _parse_suspicions_from_text(self, text: str, num_suspicions: int) -> List[str]:
+        """Parse suspicions from combined response text"""
+        
+        suspicions = []
+        lines = [line.strip() for line in text.split('\n') if line.strip()]
+        
+        import re
+        for line in lines:
+            # Look for numbered lines, bullet points, or just diagnoses
+            match = re.match(r'^(?:\d+\.|[•-])\s*(.+)', line)
+            if match:
+                diagnosis = match.group(1).strip()
+                suspicions.append(diagnosis)
+                if len(suspicions) >= num_suspicions:
+                    break
+            elif line and not re.match(r'^[A-Z\s]+:', line):  # Not a section header
+                suspicions.append(line)
+                if len(suspicions) >= num_suspicions:
+                    break
+        
+        # Fill in with generic suspicions if we don't have enough
+        while len(suspicions) < num_suspicions:
+            suspicions.append(f"Suspicion {len(suspicions) + 1}")
+        
+        return suspicions[:num_suspicions]
+    
     def create_history_summary(self, sample: Dict) -> str:
         """Create summary from first 4 inputs only (history)"""
         
@@ -1923,27 +2050,38 @@ Answer:"""
                                       all_suspicions: List[str], max_steps: int = 5) -> Dict:
         """Iterative reasoning starting from chosen suspicion"""
         
-        # For now, use standard iterative reasoning with the chosen suspicion as starting point
-        # This could be enhanced to use suspicion-specific flowcharts in the future
-        
         # Try to map suspicion to a category for flowchart navigation
         suspected_category = self.map_suspicion_to_category(chosen_suspicion)
         
         if suspected_category:
-            # Use iterative reasoning with this category
+            # Use iterative reasoning with this category, including possible diagnoses
             reasoning_result = self.iterative_reasoning_with_flowcharts(
                 sample, 6, [suspected_category], max_steps
             )
+            
+            # CRITICAL: Match the final diagnosis against possible diagnoses
+            final_diagnosis = reasoning_result['final_diagnosis']
+            matched_diagnosis = self.find_best_match(final_diagnosis)
+            reasoning_result['final_diagnosis'] = matched_diagnosis
+            
         else:
-            # Fallback: use first available category
-            if self.flowchart_categories:
+            # Fallback: try to match chosen suspicion directly against possible diagnoses
+            matched_diagnosis = self.find_best_match(chosen_suspicion)
+            
+            # If no match found, try standard iterative reasoning with first category
+            if matched_diagnosis == chosen_suspicion and self.flowchart_categories:
                 reasoning_result = self.iterative_reasoning_with_flowcharts(
                     sample, 6, [self.flowchart_categories[0]], max_steps
                 )
+                # Match against possible diagnoses
+                final_diagnosis = reasoning_result['final_diagnosis']
+                matched_diagnosis = self.find_best_match(final_diagnosis)
+                reasoning_result['final_diagnosis'] = matched_diagnosis
             else:
+                # Use the matched suspicion directly
                 reasoning_result = {
-                    'final_diagnosis': chosen_suspicion,
-                    'reasoning_trace': [{'step': 1, 'action': 'direct', 'response': f'Using chosen suspicion: {chosen_suspicion}'}],
+                    'final_diagnosis': matched_diagnosis,
+                    'reasoning_trace': [{'step': 1, 'action': 'direct_match', 'response': f'Matched chosen suspicion "{chosen_suspicion}" to possible diagnosis "{matched_diagnosis}"'}],
                     'reasoning_steps': 1,
                     'reasoning_successful': True
                 }

@@ -69,6 +69,8 @@ def main():
                        help='Use iterative step-by-step reasoning through flowcharts')
     parser.add_argument('--progressive', action='store_true',
                        help='Use progressive clinical workflow reasoning (history -> suspicions -> tests -> diagnosis)')
+    parser.add_argument('--progressive-fast', action='store_true',
+                       help='Use fast progressive reasoning (combines stages for better performance)')
     parser.add_argument('--num-categories', type=int, default=3,
                        help='Number of categories to select in two-step/iterative reasoning (default: 3)')
     parser.add_argument('--num-suspicions', type=int, default=3,
@@ -95,16 +97,17 @@ def main():
     use_llm_judge = args.use_llm_judge and not args.no_llm_judge
     
     # Validate reasoning mode arguments
-    reasoning_modes = [args.two_step, args.iterative, args.progressive]
+    reasoning_modes = [args.two_step, args.iterative, args.progressive, args.progressive_fast]
     if sum(reasoning_modes) > 1:
         print("❌ Error: Only one reasoning mode can be specified at a time")
-        print("   Choose from: --two-step, --iterative, or --progressive")
+        print("   Choose from: --two-step, --iterative, --progressive, or --progressive-fast")
         return 1
     
     # Set reasoning mode flags
     two_step_reasoning = args.two_step
     iterative_reasoning = args.iterative
-    progressive_reasoning = args.progressive
+    progressive_reasoning = args.progressive or args.progressive_fast
+    progressive_fast_mode = args.progressive_fast
     
     # Validation for different reasoning modes
     if (iterative_reasoning or progressive_reasoning) and args.max_reasoning_steps < 1:
@@ -166,7 +169,8 @@ def main():
                 iterative_reasoning=iterative_reasoning,
                 max_reasoning_steps=args.max_reasoning_steps,
                 progressive_reasoning=progressive_reasoning,
-                num_suspicions=args.num_suspicions
+                num_suspicions=args.num_suspicions,
+                progressive_fast_mode=progressive_fast_mode
             ))
         else:
             # Use synchronous evaluation
@@ -180,7 +184,8 @@ def main():
                 iterative_reasoning=iterative_reasoning,
                 max_reasoning_steps=args.max_reasoning_steps,
                 progressive_reasoning=progressive_reasoning,
-                num_suspicions=args.num_suspicions
+                num_suspicions=args.num_suspicions,
+                progressive_fast_mode=progressive_fast_mode
             )
         
         # Print summary
@@ -200,6 +205,10 @@ def main():
         if results['configuration'].get('progressive_reasoning'):
             print(f"Number of suspicions: {results['configuration'].get('num_suspicions', 3)}")
             print(f"Max reasoning steps: {results['configuration'].get('max_reasoning_steps', 5)}")
+            if progressive_fast_mode:
+                print(f"Fast mode: Enabled (combined stages for better performance)")
+            else:
+                print(f"Fast mode: Disabled (full 4-stage workflow)")
         print(f"Concurrent processing: {args.concurrent}")
         if args.concurrent:
             print(f"Max concurrent requests: {results['configuration'].get('max_concurrent', 10)}")
