@@ -9,12 +9,23 @@ from medeval import DiagnosticEvaluator
 
 def load_api_key():
     """Load API key from file"""
-    try:
-        with open('openai_api_key.txt', 'r') as f:
-            return f.read().strip()
-    except FileNotFoundError:
-        print("⚠️  openai_api_key.txt not found. Please create this file with your OpenAI API key.")
-        return None
+    # Try multiple possible locations
+    possible_paths = [
+        'openai_api_key.txt',
+        'medeval/openai_api_key.txt',
+        './medeval/openai_api_key.txt'
+    ]
+    
+    for path in possible_paths:
+        try:
+            with open(path, 'r') as f:
+                return f.read().strip()
+        except FileNotFoundError:
+            continue
+    
+    print("⚠️  openai_api_key.txt not found in any expected location.")
+    print("   Checked paths:", possible_paths)
+    return None
 
 def test_real_progressive_reasoning():
     """Test progressive reasoning with real API to verify refactor works"""
@@ -32,8 +43,7 @@ def test_real_progressive_reasoning():
     evaluator = DiagnosticEvaluator(
         api_key=api_key,
         model="gpt-4o-mini",
-        show_responses=True,  # Show responses to see the actual reasoning
-        progressive_reasoning=True
+        show_responses=True  # Show responses to see the actual reasoning
     )
     
     print(f"✅ Evaluator created with real API key")

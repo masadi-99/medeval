@@ -110,4 +110,14 @@ samples.rar
 diagnostic_kg.rar
 
 # API keys (keep private)
-openai_api_key.txt 
+openai_api_key.txt
+
+# Patient data and detailed test results (contains PHI)
+detailed_reasoning_analysis.json
+*_reasoning_analysis.json
+patient_data_*.json
+evaluation_detailed_*.json
+
+# Any files with detailed medical evaluation results
+detailed_*.json
+*_detailed_results.json 
