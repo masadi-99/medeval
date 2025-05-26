@@ -1995,13 +1995,14 @@ Now with complete clinical information available, choose your most likely diseas
             history_summary, full_summary, suspicions, recommended_tests
         )
         choice_response = self.query_llm(suspicion_choice_prompt, max_tokens=600)
-        chosen_suspicion = self.parse_suspicion_choice(choice_response, suspicions)
+        chosen_suspicion, choice_reasoning = self.parse_suspicion_choice(choice_response, suspicions)
         
         prompts_and_responses.append({
             'stage': 'stage_3_choice',
             'prompt': suspicion_choice_prompt,
             'response': choice_response,
             'parsed_choice': chosen_suspicion,
+            'choice_reasoning': choice_reasoning,  # CRITICAL: Save the reasoning for why this choice was made
             'full_summary': full_summary
         })
         
@@ -2226,33 +2227,69 @@ Now with complete clinical information available, choose your most likely diseas
         
         return suspicions[:num_suspicions]
     
-    def parse_suspicion_choice(self, response: str, suspicions: List[str]) -> str:
-        """Parse chosen suspicion from response"""
+    def parse_suspicion_choice(self, response: str, suspicions: List[str]) -> tuple:
+        """Parse chosen suspicion and reasoning from response"""
         
         import re
         
-        # Try to extract from CHOSEN SUSPICION section
+        chosen_suspicion = None
+        reasoning = ""
+        
+        # Try to extract from CHOSEN SUSPICION and REASONING sections
         chosen_match = re.search(r'CHOSEN SUSPICION:\s*(\d+)', response, re.IGNORECASE)
+        reasoning_match = re.search(r'REASONING:\s*(.+?)(?=\n\n|\n[A-Z]|\Z)', response, re.IGNORECASE | re.DOTALL)
+        
         if chosen_match:
             try:
                 choice_num = int(chosen_match.group(1))
                 if 1 <= choice_num <= len(suspicions):
-                    return suspicions[choice_num - 1]
+                    chosen_suspicion = suspicions[choice_num - 1]
             except ValueError:
                 pass
         
-        # Fallback: look for any number
-        number_match = re.search(r'\b(\d+)\b', response)
-        if number_match:
-            try:
-                choice_num = int(number_match.group(1))
-                if 1 <= choice_num <= len(suspicions):
-                    return suspicions[choice_num - 1]
-            except ValueError:
-                pass
+        if reasoning_match:
+            reasoning = reasoning_match.group(1).strip()
         
-        # Final fallback
-        return suspicions[0] if suspicions else "Unknown"
+        # Fallback: look for any number if structured format failed
+        if chosen_suspicion is None:
+            number_match = re.search(r'\b(\d+)\b', response)
+            if number_match:
+                try:
+                    choice_num = int(number_match.group(1))
+                    if 1 <= choice_num <= len(suspicions):
+                        chosen_suspicion = suspicions[choice_num - 1]
+                except ValueError:
+                    pass
+        
+        # Final fallback for chosen suspicion
+        if chosen_suspicion is None:
+            chosen_suspicion = suspicions[0] if suspicions else "Unknown"
+        
+        # If no structured reasoning found, try to extract any reasoning text
+        if not reasoning:
+            # Look for reasoning patterns
+            reasoning_patterns = [
+                r'because\s+(.+?)(?=\n|$)',
+                r'since\s+(.+?)(?=\n|$)', 
+                r'due to\s+(.+?)(?=\n|$)',
+                r'based on\s+(.+?)(?=\n|$)',
+                r'given\s+(.+?)(?=\n|$)',
+                r'shows\s+(.+?)(?=\n|$)',
+                r'indicates\s+(.+?)(?=\n|$)',
+                r'consistent with\s+(.+?)(?=\n|$)'
+            ]
+            
+            for pattern in reasoning_patterns:
+                match = re.search(pattern, response, re.IGNORECASE)
+                if match:
+                    reasoning = match.group(1).strip()
+                    break
+            
+            # If still no reasoning, use the whole response as reasoning context
+            if not reasoning and len(response.strip()) > 50:
+                reasoning = response.strip()
+        
+        return chosen_suspicion, reasoning
     
     def progressive_iterative_reasoning(self, sample: Dict, chosen_suspicion: str, 
                                       all_suspicions: List[str], max_steps: int = 5) -> Dict:
@@ -2310,6 +2347,12 @@ Now with complete clinical information available, choose your most likely diseas
         
         suspicion_lower = suspicion.lower()
         
+        # CRITICAL FIX: Check for exact matches first before keyword matching
+        # This prevents "Heart Failure" from mapping to "Acute Coronary Syndrome"
+        for flowchart_category in self.flowchart_categories:
+            if suspicion_lower == flowchart_category.lower():
+                return flowchart_category
+        
         # CRITICAL FIX: Handle tuberculosis specifically - it should map to Pneumonia for respiratory symptoms
         # since both tuberculosis and bacterial pneumonia are respiratory infections
         if 'tuberculosis' in suspicion_lower or 'tb' == suspicion_lower:
@@ -2340,7 +2383,7 @@ Now with complete clinical information available, choose your most likely diseas
             'hematologic': ['anemia', 'bleeding', 'hematologic', 'blood'],
         }
         
-        # Standard mapping for other suspicions
+        # Standard mapping for other suspicions (only after exact matching fails)
         for category, keywords in category_keywords.items():
             for keyword in keywords:
                 if keyword in suspicion_lower:
