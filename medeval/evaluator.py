@@ -2249,13 +2249,17 @@ Now with complete clinical information available, choose your most likely diseas
                                       all_suspicions: List[str], max_steps: int = 5) -> Dict:
         """Iterative reasoning starting from chosen suspicion"""
         
-        # First check if chosen_suspicion is already a category name
+        # CRITICAL FIX: Try to map suspicion to broader category first, rather than treating
+        # specific diseases as categories. This prevents issues where "Tuberculosis" is chosen
+        # as a suspicion for a pneumonia case, but we have both Tuberculosis.json and Pneumonia.json
         suspected_category = None
-        if chosen_suspicion in self.flowchart_categories:
+        
+        # First priority: Map suspicion to a broader category for flowchart navigation
+        suspected_category = self.map_suspicion_to_category(chosen_suspicion)
+        
+        # Second priority: Only if mapping failed AND suspicion is already a category name
+        if suspected_category is None and chosen_suspicion in self.flowchart_categories:
             suspected_category = chosen_suspicion
-        else:
-            # Try to map suspicion to a category for flowchart navigation
-            suspected_category = self.map_suspicion_to_category(chosen_suspicion)
         
         if suspected_category:
             # Use iterative reasoning with this category, including possible diagnoses
@@ -2297,18 +2301,37 @@ Now with complete clinical information available, choose your most likely diseas
         
         suspicion_lower = suspicion.lower()
         
-        # Simple mapping - could be enhanced with more sophisticated matching
+        # CRITICAL FIX: Handle tuberculosis specifically - it should map to Pneumonia for respiratory symptoms
+        # since both tuberculosis and bacterial pneumonia are respiratory infections
+        if 'tuberculosis' in suspicion_lower or 'tb' == suspicion_lower:
+            # Look for Pneumonia category first (broader respiratory infectious disease category)
+            for flowchart_category in self.flowchart_categories:
+                if 'pneumonia' in flowchart_category.lower():
+                    return flowchart_category
+            # Fallback to any respiratory category
+            for flowchart_category in self.flowchart_categories:
+                if any(keyword in flowchart_category.lower() for keyword in ['respiratory', 'lung', 'pulmonary']):
+                    return flowchart_category
+        
+        # CRITICAL FIX: Handle pneumonia suspicions - they should map directly to Pneumonia category
+        if 'pneumonia' in suspicion_lower:
+            for flowchart_category in self.flowchart_categories:
+                if 'pneumonia' in flowchart_category.lower():
+                    return flowchart_category
+        
+        # Enhanced mapping with better coverage for respiratory diseases
         category_keywords = {
             'cardiovascular': ['heart', 'cardiac', 'myocardial', 'coronary', 'angina', 'infarction', 'arrhythmia', 'hypertension'],
-            'respiratory': ['lung', 'pulmonary', 'pneumonia', 'asthma', 'copd', 'respiratory', 'bronch'],
+            'respiratory': ['lung', 'pulmonary', 'asthma', 'copd', 'respiratory', 'bronch'],
             'gastrointestinal': ['gastric', 'intestinal', 'bowel', 'stomach', 'liver', 'pancreatic', 'gallbladder'],
             'neurological': ['stroke', 'seizure', 'neurologic', 'brain', 'headache', 'migraine'],
             'endocrine': ['diabetes', 'thyroid', 'hormone', 'endocrine', 'metabolic'],
-            'infectious': ['infection', 'sepsis', 'bacterial', 'viral', 'pneumonia'],
+            'infectious': ['infection', 'sepsis', 'bacterial', 'viral'],
             'renal': ['kidney', 'renal', 'urinary', 'nephro'],
             'hematologic': ['anemia', 'bleeding', 'hematologic', 'blood'],
         }
         
+        # Standard mapping for other suspicions
         for category, keywords in category_keywords.items():
             for keyword in keywords:
                 if keyword in suspicion_lower:
@@ -2316,8 +2339,12 @@ Now with complete clinical information available, choose your most likely diseas
                     for flowchart_category in self.flowchart_categories:
                         if category.lower() in flowchart_category.lower():
                             return flowchart_category
+                    # If exact match not found, try partial matching
+                    for flowchart_category in self.flowchart_categories:
+                        if any(kw in flowchart_category.lower() for kw in keywords):
+                            return flowchart_category
         
-        return None 
+        return None
 
     def extract_tests_from_recommendations(self, recommended_tests: str) -> List[str]:
         """Extract individual test names from LLM recommendations"""
