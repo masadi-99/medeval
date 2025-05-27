@@ -648,6 +648,50 @@ class CleanProgressiveReasoning:
         
         return prompt
     
+    def _create_single_step_direct_reasoning_prompt(self, full_summary: str) -> str:
+        """Create prompt for single-step direct reasoning with all patient info and all possible diagnoses"""
+        
+        prompt = f"""You are a medical expert tasked with providing a primary discharge diagnosis based on complete clinical information.
+
+**Complete Patient Clinical Information:**
+{full_summary}
+
+**All Possible Primary Discharge Diagnoses:**
+{chr(10).join(f'{i+1}. {diagnosis}' for i, diagnosis in enumerate(self.possible_diagnoses))}
+
+**Task:** Based on the complete clinical information provided above, determine the most likely primary discharge diagnosis from the possible diagnoses list.
+
+**CRITICAL INSTRUCTIONS:**
+• Analyze ALL the clinical information systematically (history, examination, laboratory/imaging results)
+• Consider differential diagnoses and rule out alternatives
+• Use evidence-based medical reasoning to support your choice
+• You MUST choose from the numbered list of possible diagnoses above
+• Provide detailed reasoning FIRST, then your final diagnosis
+• Use the exact diagnosis name from the numbered list
+
+**Required Analysis Structure:**
+
+**SYSTEMATIC CLINICAL ANALYSIS:**
+[Analyze the patient presentation systematically - demographics, chief complaint, history, physical findings, laboratory/imaging results]
+
+**DIFFERENTIAL DIAGNOSIS CONSIDERATION:**
+[Consider the main differential diagnoses based on the clinical presentation and explain why you are considering or ruling out each major possibility]
+
+**EVIDENCE MATCHING:**
+[Match the patient's specific clinical findings against the diagnostic criteria for your top differential diagnoses]
+
+**SUPPORTING EVIDENCE:**
+[List the specific clinical findings that strongly support your chosen diagnosis]
+
+**CONTRADICTORY EVIDENCE:**
+[Address any findings that might argue against your chosen diagnosis and explain why your diagnosis is still most likely]
+
+**FINAL DIAGNOSIS:** [Exact diagnosis name from the numbered list above]
+
+**DIAGNOSTIC REASONING:** [Complete medical justification for your final diagnosis choice, including why this diagnosis is more likely than the main alternatives]"""
+        
+        return prompt
+    
     # === PARSING METHODS ===
     
     def _parse_step0_candidates(self, response: str, num_candidates: int) -> List[str]:
@@ -934,6 +978,78 @@ class CleanProgressiveReasoning:
         
         return options[0] if options else "Unknown"
     
+    def _parse_single_step_final_diagnosis(self, response: str) -> str:
+        """Parse final diagnosis from single-step direct reasoning response"""
+        
+        # First, try to extract from FINAL DIAGNOSIS section
+        final_diagnosis_match = re.search(r'FINAL DIAGNOSIS:\s*(.+?)(?=\n|\Z)', response, re.IGNORECASE)
+        if final_diagnosis_match:
+            diagnosis_text = final_diagnosis_match.group(1).strip()
+            
+            # Try to extract diagnosis name (remove any numbering if present)
+            # Look for numbered format like "1. Diagnosis Name" or just "Diagnosis Name"
+            clean_match = re.search(r'(?:\d+\.\s*)?(.+)', diagnosis_text)
+            if clean_match:
+                candidate_diagnosis = clean_match.group(1).strip()
+                
+                # Check if this matches any of our possible diagnoses
+                matched = self._find_exact_diagnosis_match(candidate_diagnosis)
+                if matched:
+                    return matched
+        
+        # Fallback: look for numbered diagnosis in the response
+        numbered_matches = re.findall(r'(\d+)\.\s*([^.\n]+)', response)
+        for num_str, diagnosis_text in numbered_matches:
+            try:
+                num = int(num_str)
+                if 1 <= num <= len(self.possible_diagnoses):
+                    return self.possible_diagnoses[num - 1]
+            except ValueError:
+                continue
+        
+        # Final fallback: try to find any possible diagnosis mentioned in the text
+        for diagnosis in self.possible_diagnoses:
+            if diagnosis.lower() in response.lower():
+                return diagnosis
+        
+        return "Unknown Diagnosis"
+    
+    def _find_exact_diagnosis_match(self, candidate: str) -> str:
+        """Find exact match from possible diagnoses list"""
+        
+        # Remove common prefixes/suffixes and clean the text
+        cleaned_candidate = re.sub(r'^(?:primary|discharge|final)?\s*(?:diagnosis:?)?\s*', '', candidate, flags=re.IGNORECASE)
+        cleaned_candidate = cleaned_candidate.strip()
+        
+        # Try exact match first
+        for diagnosis in self.possible_diagnoses:
+            if diagnosis.lower() == cleaned_candidate.lower():
+                return diagnosis
+        
+        # Try partial match
+        for diagnosis in self.possible_diagnoses:
+            if diagnosis.lower() in cleaned_candidate.lower() or cleaned_candidate.lower() in diagnosis.lower():
+                return diagnosis
+        
+        return ""
+    
+    def _extract_single_step_reasoning(self, response: str) -> str:
+        """Extract reasoning from single-step direct reasoning response"""
+        
+        # Try to extract everything before FINAL DIAGNOSIS
+        final_diagnosis_pos = response.lower().find('final diagnosis:')
+        if final_diagnosis_pos > 0:
+            reasoning_text = response[:final_diagnosis_pos].strip()
+        else:
+            # Use the full response as reasoning
+            reasoning_text = response.strip()
+        
+        # Clean up the reasoning text
+        reasoning_text = re.sub(r'\*\*[^*]+\*\*\s*', '', reasoning_text)  # Remove section headers
+        reasoning_text = ' '.join(reasoning_text.split())  # Normalize whitespace
+        
+        return reasoning_text if reasoning_text else response.strip()
+    
     # === UTILITY METHODS ===
     
     def _create_history_only_summary(self, sample: Dict) -> str:
@@ -1029,6 +1145,137 @@ class CleanProgressiveReasoning:
             'mode': 'clean_step_by_step_fixed_error'
         }
 
+    def run_single_step_direct_reasoning(self, sample: Dict) -> Dict:
+        """
+        Single-step direct reasoning: All patient info + all possible diagnoses → Final diagnosis with reasoning.
+        
+        Args:
+            sample: Clinical sample data
+            
+        Returns:
+            Complete results with reasoning and final diagnosis
+        """
+        
+        # Track the single step with prompt and response
+        prompts_and_responses = []
+        
+        try:
+            print("🔍 Single-step direct reasoning: Analyzing all clinical data with all possible diagnoses...")
+            
+            # Get complete clinical information (all 6 inputs)
+            full_summary = self.evaluator.create_patient_data_summary(sample, 6)
+            
+            # Create single-step direct reasoning prompt
+            prompt = self._create_single_step_direct_reasoning_prompt(full_summary)
+            
+            # Query LLM with generous token limit for reasoning
+            response = self.evaluator.query_llm(prompt, max_tokens=1500)
+            
+            # Parse final diagnosis from response
+            final_diagnosis = self._parse_single_step_final_diagnosis(response)
+            matched_diagnosis = self.evaluator.find_best_match(final_diagnosis)
+            
+            # Extract reasoning from response
+            reasoning = self._extract_single_step_reasoning(response)
+            
+            # Create step record
+            step_result = {
+                'step': 1,
+                'stage': 'single_step_direct_reasoning',
+                'action': 'direct_diagnosis_with_reasoning',
+                'prompt': prompt,
+                'response': response,
+                'extracted_diagnosis': final_diagnosis,
+                'matched_diagnosis': matched_diagnosis,
+                'reasoning': reasoning
+            }
+            prompts_and_responses.append(step_result)
+            
+            print(f"✅ Single-step reasoning complete: {matched_diagnosis}")
+            
+            return {
+                'final_diagnosis': matched_diagnosis,
+                'reasoning_steps': 1,
+                'suspicions': [],  # Not applicable for single-step
+                'recommended_tests': '',  # Not applicable for single-step
+                'chosen_suspicion': matched_diagnosis,
+                'reasoning_successful': bool(matched_diagnosis),
+                'prompts_and_responses': prompts_and_responses,
+                'reasoning_trace': prompts_and_responses,
+                'mode': 'single_step_direct_reasoning'
+            }
+            
+        except Exception as e:
+            print(f"❌ Error in single-step direct reasoning: {e}")
+            return self._create_failure_result(f"Single-step reasoning error: {e}", prompts_and_responses)
+    
+    async def run_single_step_direct_reasoning_async(self, sample: Dict, request_prefix: str = "") -> Dict:
+        """
+        Async version: Single-step direct reasoning with all patient info and possible diagnoses.
+        
+        Args:
+            sample: Clinical sample data
+            request_prefix: Unique prefix for tracking requests
+            
+        Returns:
+            Complete results with reasoning and final diagnosis
+        """
+        
+        # Track the single step with prompt and response
+        prompts_and_responses = []
+        
+        try:
+            # Get complete clinical information (all 6 inputs)
+            full_summary = self.evaluator.create_patient_data_summary(sample, 6)
+            
+            # Create single-step direct reasoning prompt
+            prompt = self._create_single_step_direct_reasoning_prompt(full_summary)
+            
+            # Query LLM async with generous token limit for reasoning
+            response_data = await self.evaluator.query_llm_async(prompt, f"{request_prefix}_single_step", max_tokens=1500)
+            
+            if not response_data['success']:
+                raise Exception(f"Single-step API call failed: {response_data['error']}")
+            
+            response = response_data['response']
+            
+            # Parse final diagnosis from response
+            final_diagnosis = self._parse_single_step_final_diagnosis(response)
+            matched_diagnosis = self.evaluator.find_best_match(final_diagnosis)
+            
+            # Extract reasoning from response
+            reasoning = self._extract_single_step_reasoning(response)
+            
+            # Create step record
+            step_result = {
+                'step': 1,
+                'stage': 'single_step_direct_reasoning',
+                'action': 'direct_diagnosis_with_reasoning',
+                'prompt': prompt,
+                'response': response,
+                'extracted_diagnosis': final_diagnosis,
+                'matched_diagnosis': matched_diagnosis,
+                'reasoning': reasoning,
+                'request_id': f"{request_prefix}_single_step"
+            }
+            prompts_and_responses.append(step_result)
+            
+            return {
+                'final_diagnosis': matched_diagnosis,
+                'reasoning_steps': 1,
+                'suspicions': [],  # Not applicable for single-step
+                'recommended_tests': '',  # Not applicable for single-step
+                'chosen_suspicion': matched_diagnosis,
+                'reasoning_successful': bool(matched_diagnosis),
+                'prompts_and_responses': prompts_and_responses,
+                'reasoning_trace': prompts_and_responses,
+                'mode': 'single_step_direct_reasoning_async'
+            }
+            
+        except Exception as e:
+            print(f"❌ Error in async single-step direct reasoning: {e}")
+            return self._create_failure_result(f"Async single-step reasoning error: {e}", prompts_and_responses)
+
 
 def integrate_clean_progressive_reasoning(evaluator):
     """
@@ -1046,9 +1293,22 @@ def integrate_clean_progressive_reasoning(evaluator):
             sample, num_suspicions, max_reasoning_steps
         )
     
-    # Bind the new method to the evaluator
+    # Add the new single-step direct reasoning method
+    def new_single_step_direct_reasoning(self, sample: Dict) -> Dict:
+        """Wrapper to use single-step direct reasoning"""
+        return clean_reasoning.run_single_step_direct_reasoning(sample)
+    
+    # Add async version of single-step direct reasoning
+    async def new_single_step_direct_reasoning_async(self, sample: Dict, request_prefix: str = "") -> Dict:
+        """Async wrapper to use single-step direct reasoning"""
+        return await clean_reasoning.run_single_step_direct_reasoning_async(sample, request_prefix)
+    
+    # Bind the new methods to the evaluator
     import types
     evaluator.progressive_reasoning_workflow = types.MethodType(new_progressive_reasoning_workflow, evaluator)
+    evaluator.single_step_direct_reasoning = types.MethodType(new_single_step_direct_reasoning, evaluator)
+    evaluator.single_step_direct_reasoning_async = types.MethodType(new_single_step_direct_reasoning_async, evaluator)
     
     print("✅ Clean progressive reasoning (FIXED) integrated successfully!")
+    print("✅ Single-step direct reasoning integrated successfully!")
     return evaluator 
