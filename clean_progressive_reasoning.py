@@ -518,7 +518,7 @@ class CleanProgressiveReasoning:
 • Do NOT use synonyms, abbreviations, or full names if they differ from the list
 • Do NOT invent new category names or use alternative spellings
 • Focus only on the patient history provided (no additional test results yet)
-• Choose categories that best match the presenting symptoms and history
+• Choose categories that most likely match the presenting symptoms and history
 • Provide reasoning for each choice based on historical clinical findings
 • Rank them in order of likelihood
 
@@ -550,19 +550,19 @@ class CleanProgressiveReasoning:
 
 {flowchart_info}
 
-**Task:** Choose the best initial diagnosis from the flowchart diagnostic structures above using the clinical knowledge provided.
+**Task:** Choose the most likely initial diagnosis from the flowchart diagnostic structures above using the clinical knowledge provided.
 
 **CRITICAL INSTRUCTIONS:**
 • You must choose from the FIRST-LEVEL diagnoses in the diagnostic structures (e.g., "Suspected Pneumonia", "Suspected Pulmonary Embolism")
 • These first-level diagnoses are the entry points to the flowcharts
 • USE THE CLINICAL KNOWLEDGE provided for each suspected condition to guide your decision
 • Match patient's clinical findings (symptoms, signs, risk factors) against the knowledge provided for each suspected condition
-• Choose the initial diagnosis where the patient's presentation best matches the clinical knowledge criteria
+• Choose the initial diagnosis where the patient's presentation most likely matches the clinical knowledge criteria
 • Focus on evidence-based matching between patient findings and the risk factors, symptoms, and signs listed
 
 **Analysis Required:**
 • Compare patient's clinical findings against the clinical knowledge (risk factors, symptoms, signs) for each suspected condition
-• Identify which suspected diagnosis has the best clinical knowledge match with the patient presentation
+• Identify which suspected diagnosis has the most likely clinical knowledge match with the patient presentation
 • Use the provided symptoms, signs, and risk factors to guide your evidence matching
 • Provide detailed evidence matching using the clinical knowledge criteria
 • Explain why your chosen suspected diagnosis has superior clinical knowledge alignment
@@ -623,7 +623,7 @@ class CleanProgressiveReasoning:
         
         prompt += f"""
 
-**Task:** Choose the most appropriate next step in the flowchart based on patient's clinical findings.
+**Task:** Choose the most likely next step in the flowchart based on patient's clinical findings.
 
 **CRITICAL INSTRUCTIONS:**
 • Follow the flowchart structure step-by-step until reaching a leaf node (final diagnosis)
@@ -641,7 +641,7 @@ class CleanProgressiveReasoning:
         prompt += f"""
 
 **FLOWCHART REASONING:**
-[Why chosen option best fits the flowchart progression and patient evidence]
+[Why chosen option most likely fits the flowchart progression and patient evidence]
 
 **CHOSEN STEP:** [Number] - [Step name]
 **REASONING:** [Complete medical justification based on flowchart criteria]"""
