@@ -737,7 +737,10 @@ class CleanProgressiveReasoning:
             if match:
                 candidate = match.group(1).strip()
                 if self._is_valid_medical_category(candidate):
-                    return self._map_to_flowchart_category(candidate)
+                    mapped = self._map_to_flowchart_category(candidate)
+                    # CRITICAL: Only return if it maps to a valid flowchart category
+                    if mapped and mapped in self.flowchart_categories:
+                        return mapped
         
         # Fallback: try original patterns but with better validation
         fallback_patterns = [
@@ -750,9 +753,12 @@ class CleanProgressiveReasoning:
                 candidate = match.group(1) if match.group(1) and not match.group(1).strip().endswith('.') else match.group(2)
                 candidate = candidate.strip()
                 
-                # Only accept if it looks like a medical condition
+                # Only accept if it looks like a medical condition AND maps to valid flowchart
                 if self._is_valid_medical_category(candidate):
-                    return self._map_to_flowchart_category(candidate)
+                    mapped = self._map_to_flowchart_category(candidate)
+                    # CRITICAL: Only return if it maps to a valid flowchart category
+                    if mapped and mapped in self.flowchart_categories:
+                        return mapped
         
         return ""
     
