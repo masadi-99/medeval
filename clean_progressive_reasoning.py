@@ -704,7 +704,15 @@ class CleanProgressiveReasoning:
                     'Heart Failure': 'Heart Failure',
                     'Pneumonia': 'Pneumonia',
                     'COPD': 'COPD',
-                    'Asthma': 'Asthma'
+                    'Chronic Obstructive Pulmonary Disease': 'COPD',  # Map full name to abbreviation
+                    'Asthma': 'Asthma',
+                    'Gastroesophageal Reflux Disease': 'Gastro-oesophageal Reflux Disease',  # Handle spelling variations
+                    'GERD': 'Gastro-oesophageal Reflux Disease',
+                    'Multiple Sclerosis': 'Multiple Sclerosis',
+                    'MS': 'Multiple Sclerosis',
+                    'Atrial Fibrillation': 'Atrial Fibrillation',
+                    'AFib': 'Atrial Fibrillation',
+                    'A-fib': 'Atrial Fibrillation'
                 }
                 
                 # Try exact match first
