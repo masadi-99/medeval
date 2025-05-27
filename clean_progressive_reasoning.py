@@ -19,32 +19,30 @@ import re
 import json
 import asyncio
 
-# Import flowchart utilities (these need to exist in the main codebase)
+# Import utility functions directly to avoid circular imports
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 try:
     from medeval.utils import (
-        load_flowchart_content, get_flowchart_knowledge, 
-        get_flowchart_structure, get_flowchart_children, 
-        is_leaf_diagnosis, get_flowchart_first_step
+        load_flowchart_content,
+        get_flowchart_knowledge, 
+        get_flowchart_structure,
+        get_flowchart_children,
+        is_leaf_diagnosis,
+        get_flowchart_first_step
     )
 except ImportError:
-    # Fallback implementations if utilities don't exist
-    def load_flowchart_content(category: str, flowchart_dir: str) -> Dict:
-        return {"mock": "data"}
-    
-    def get_flowchart_knowledge(data: Dict) -> Dict:
-        return {"mock": "knowledge"}
-    
-    def get_flowchart_structure(data: Dict) -> Dict:
-        return {"mock": "structure"}
-    
-    def get_flowchart_children(structure: Dict, node: str) -> List[str]:
-        return ["child1", "child2"]
-    
-    def is_leaf_diagnosis(structure: Dict, node: str) -> bool:
-        return False
-    
-    def get_flowchart_first_step(data: Dict) -> str:
-        return "Suspected Mock Disease"
+    # Fallback: try direct import from local file
+    from utils import (
+        load_flowchart_content,
+        get_flowchart_knowledge, 
+        get_flowchart_structure,
+        get_flowchart_children,
+        is_leaf_diagnosis,
+        get_flowchart_first_step
+    )
 
 
 class CleanProgressiveReasoning:
@@ -535,39 +533,41 @@ class CleanProgressiveReasoning:
         return prompt
     
     def _create_step1_improved_prompt(self, full_summary: str, flowchart_info: str) -> str:
-        """Create Step 1 prompt for choosing from flowchart diagnostic structures"""
+        """Create Step 1 prompt for choosing from flowchart diagnostic structures with clinical knowledge"""
         
-        prompt = f"""You are a medical expert with complete clinical information and access to diagnostic flowcharts.
+        prompt = f"""You are a medical expert with complete clinical information and access to diagnostic flowcharts with clinical knowledge.
 
 **Complete Patient Clinical Information:**
 {full_summary}
 
 {flowchart_info}
 
-**Task:** Choose the best initial diagnosis from the flowchart diagnostic structures above.
+**Task:** Choose the best initial diagnosis from the flowchart diagnostic structures above using the clinical knowledge provided.
 
 **CRITICAL INSTRUCTIONS:**
 • You must choose from the FIRST-LEVEL diagnoses in the diagnostic structures (e.g., "Suspected Pneumonia", "Suspected Pulmonary Embolism")
 • These first-level diagnoses are the entry points to the flowcharts
-• Choose the initial diagnosis where the patient's clinical findings best match
-• Focus on evidence-based matching between patient findings and suspected conditions
-• Do NOT choose deeper-level diagnoses - only the first-level "Suspected..." diagnoses
+• USE THE CLINICAL KNOWLEDGE provided for each suspected condition to guide your decision
+• Match patient's clinical findings (symptoms, signs, risk factors) against the knowledge provided for each suspected condition
+• Choose the initial diagnosis where the patient's presentation best matches the clinical knowledge criteria
+• Focus on evidence-based matching between patient findings and the risk factors, symptoms, and signs listed
 
 **Analysis Required:**
-• Compare patient's clinical findings against each suspected condition
-• Identify which suspected diagnosis best fits the patient presentation
-• Provide detailed evidence matching for your choice
-• Explain why your chosen suspected diagnosis is superior to other options
+• Compare patient's clinical findings against the clinical knowledge (risk factors, symptoms, signs) for each suspected condition
+• Identify which suspected diagnosis has the best clinical knowledge match with the patient presentation
+• Use the provided symptoms, signs, and risk factors to guide your evidence matching
+• Provide detailed evidence matching using the clinical knowledge criteria
+• Explain why your chosen suspected diagnosis has superior clinical knowledge alignment
 
 **Format:**
-**CLINICAL EVIDENCE ANALYSIS:**
-[Systematic comparison of patient findings against each suspected condition]
+**CLINICAL KNOWLEDGE MATCHING:**
+[Systematic comparison of patient findings against the risk factors, symptoms, and signs provided for each suspected condition]
 
-**COMPARATIVE REASONING:**
-[Compare how well patient matches each suspected diagnosis and explain your choice]
+**EVIDENCE-BASED REASONING:**
+[Compare how well patient matches the clinical knowledge criteria for each suspected diagnosis and explain your choice]
 
 **CHOSEN INITIAL DIAGNOSIS:** [Exact first-level diagnosis name from the diagnostic structures above - must start with "Suspected"]
-**DETAILED REASONING:** [Complete medical justification with evidence matching]"""
+**DETAILED REASONING:** [Complete medical justification using the clinical knowledge criteria (risk factors, symptoms, signs) provided above]"""
         
         return prompt
     
@@ -841,7 +841,7 @@ class CleanProgressiveReasoning:
         return summary.strip()
     
     def _load_complete_flowcharts(self, candidates: List[str]) -> Tuple[str, Dict]:
-        """Load complete flowcharts for candidates and present raw diagnostic structures for selection"""
+        """Load complete flowcharts for candidates and present raw diagnostic structures + clinical knowledge for selection"""
         
         flowchart_info = "**AVAILABLE DIAGNOSTIC FLOWCHARTS:**\n\n"
         loaded_flowcharts = {}
@@ -855,7 +855,23 @@ class CleanProgressiveReasoning:
                 if 'diagnostic' in flowchart_data:
                     diagnostic_structure = flowchart_data['diagnostic']
                     flowchart_info += f"**{candidate} Flowchart:**\n"
-                    flowchart_info += f'"diagnostic": {diagnostic_structure}\n\n'
+                    flowchart_info += f'"diagnostic": {diagnostic_structure}\n'
+                    
+                    # ENHANCEMENT: Also include clinical knowledge for first-level diagnoses
+                    if 'knowledge' in flowchart_data:
+                        knowledge_data = flowchart_data['knowledge']
+                        # Extract knowledge for each first-level diagnostic key
+                        for first_level_key in diagnostic_structure.keys():
+                            if first_level_key in knowledge_data:
+                                knowledge_content = knowledge_data[first_level_key]
+                                if isinstance(knowledge_content, dict):
+                                    flowchart_info += f"\n**{first_level_key} Clinical Knowledge:**\n"
+                                    # Add risk factors, symptoms, signs if available
+                                    for knowledge_type in ['Risk Factors', 'Symptoms', 'Signs']:
+                                        if knowledge_type in knowledge_content:
+                                            flowchart_info += f"• {knowledge_type}: {knowledge_content[knowledge_type]}\n"
+                    
+                    flowchart_info += "\n"
                 else:
                     # Fallback if diagnostic structure not found
                     flowchart_info += f"**{candidate} Flowchart:**\n"
