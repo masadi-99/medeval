@@ -508,27 +508,35 @@ class CleanProgressiveReasoning:
 **Patient History (Initial Information Only):**
 {history_summary}
 
-**Available Disease Categories:**
+**Available Disease Categories (EXACT NAMES TO CHOOSE FROM):**
 {chr(10).join(f'{i+1}. {cat}' for i, cat in enumerate(self.flowchart_categories))}
 
 **Task:** Based on the patient history above, select the {num_candidates} most likely disease categories.
 
-**Instructions:**
+**CRITICAL INSTRUCTIONS:**
+• You MUST choose EXACTLY from the numbered list above - use the EXACT names provided
+• Do NOT use synonyms, abbreviations, or full names if they differ from the list
+• Do NOT invent new category names or use alternative spellings
 • Focus only on the patient history provided (no additional test results yet)
 • Choose categories that best match the presenting symptoms and history
 • Provide reasoning for each choice based on historical clinical findings
 • Rank them in order of likelihood
+
+**Examples of CORRECT responses:**
+• "COPD" (if "COPD" is in the list) - NOT "Chronic Obstructive Pulmonary Disease"
+• "Acute Coronary Syndrome" (if listed) - NOT "ACS" or "Heart Attack"
+• "Pulmonary Embolism" (if listed) - NOT "PE" or "Blood Clot"
 
 **Format:**
 **CLINICAL REASONING:**
 [Systematic analysis of history against potential categories]
 
 **FINAL CANDIDATES:**
-1. [Most likely category with brief justification]
-2. [Second most likely category with brief justification]
-3. [Third most likely category with brief justification]
+1. [EXACT category name from numbered list above with brief justification]
+2. [EXACT category name from numbered list above with brief justification]  
+3. [EXACT category name from numbered list above with brief justification]
 
-**DETAILED REASONING:** [Complete explanation of choice rationale]"""
+**DETAILED REASONING:** [Complete explanation of choice rationale using only the exact category names from the list]"""
         
         return prompt
     
@@ -643,7 +651,7 @@ class CleanProgressiveReasoning:
     # === PARSING METHODS ===
     
     def _parse_step0_candidates(self, response: str, num_candidates: int) -> List[str]:
-        """Parse chosen candidates from Step 0 response"""
+        """Parse chosen candidates from Step 0 response - prioritize exact matches"""
         
         candidates = []
         
@@ -652,12 +660,22 @@ class CleanProgressiveReasoning:
         if final_match:
             lines = final_match.group(1).strip().split('\n')
             for line in lines:
-                # Look for category names in the line - extract clean names
-                clean_candidate = self._extract_clean_category_name(line)
-                if clean_candidate and clean_candidate not in candidates:
-                    candidates.append(clean_candidate)
+                # Look for exact matches from flowchart categories first
+                exact_candidate = self._extract_exact_category_match(line)
+                if exact_candidate and exact_candidate not in candidates:
+                    candidates.append(exact_candidate)
         
         # Fallback: numbered lists anywhere in response
+        if len(candidates) < num_candidates:
+            all_matches = re.findall(r'^\d+\.\s*(.+)', response, re.MULTILINE)
+            for match in all_matches:
+                exact_candidate = self._extract_exact_category_match(match)
+                if exact_candidate and exact_candidate not in candidates:
+                    candidates.append(exact_candidate)
+                    if len(candidates) >= num_candidates:
+                        break
+        
+        # Final fallback: use old parsing if needed
         if len(candidates) < num_candidates:
             all_matches = re.findall(r'^\d+\.\s*(.+)', response, re.MULTILINE)
             for match in all_matches:
@@ -673,6 +691,25 @@ class CleanProgressiveReasoning:
         
         return candidates[:num_candidates]
     
+    def _extract_exact_category_match(self, text: str) -> str:
+        """Extract exact category name from flowchart categories list"""
+        
+        # Remove markdown formatting and clean text
+        clean_text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+        clean_text = clean_text.strip()
+        
+        # Try exact substring matching against flowchart categories
+        for category in self.flowchart_categories:
+            if category in clean_text:
+                return category
+        
+        # Try case-insensitive matching
+        for category in self.flowchart_categories:
+            if category.lower() in clean_text.lower():
+                return category
+        
+        return ""
+    
     def _extract_clean_category_name(self, text: str) -> str:
         """Extract clean category name from LLM response text"""
         
@@ -680,58 +717,122 @@ class CleanProgressiveReasoning:
         clean_text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
         clean_text = clean_text.strip()
         
-        # Common patterns to extract category names
-        patterns = [
-            r'(\d+\.\s*)?([A-Za-z][A-Za-z\s]+?)(?:\s*-|\s*\(|\Z)',  # Extract before dash or parenthesis
-            r'([A-Za-z][A-Za-z\s]+?)(?:\s*-)',  # Extract before dash
-            r'([A-Za-z][A-Za-z\s]+?)(?:\s*\()',  # Extract before parenthesis
-            r'([A-Za-z][A-Za-z\s]+?)(?:\s*:)',  # Extract before colon
+        # First try to extract from numbered lists (most reliable)
+        numbered_match = re.search(r'^\d+\.\s*([A-Za-z][A-Za-z\s\-]+?)(?:\s*-|\s*\(|$)', clean_text)
+        if numbered_match:
+            candidate = numbered_match.group(1).strip()
+            if self._is_valid_medical_category(candidate):
+                return self._map_to_flowchart_category(candidate)
+        
+        # Try to extract medical condition names (more specific patterns)
+        medical_patterns = [
+            r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:\s+Disease|\s+Syndrome|\s+Disorder|\s+Insufficiency|\s+Failure|\s+Embolism|\s+Dissection))\b',  # Formal medical names
+            r'\b(COPD|ACS|PE|MS|GERD|AFib)\b',  # Common abbreviations
+            r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:\s+Cancer|\s+Tumor|\s+Carcinoma))\b',  # Cancer terms
+            r'\b(Pneumonia|Asthma|Migraine|Stroke|Diabetes|Hypertension|Tuberculosis|Epilepsy)\b',  # Common single-word conditions
         ]
         
-        for pattern in patterns:
+        for pattern in medical_patterns:
+            match = re.search(pattern, clean_text)
+            if match:
+                candidate = match.group(1).strip()
+                if self._is_valid_medical_category(candidate):
+                    return self._map_to_flowchart_category(candidate)
+        
+        # Fallback: try original patterns but with better validation
+        fallback_patterns = [
+            r'(\d+\.\s*)?([A-Za-z][A-Za-z\s\-]+?)(?:\s*-|\s*\(|\Z)',  # Extract before dash or parenthesis
+        ]
+        
+        for pattern in fallback_patterns:
             match = re.search(pattern, clean_text)
             if match:
                 candidate = match.group(1) if match.group(1) and not match.group(1).strip().endswith('.') else match.group(2)
                 candidate = candidate.strip()
                 
-                # Map common variations to actual flowchart categories
-                category_mapping = {
-                    'Acute Coronary Syndrome': 'Acute Coronary Syndrome',
-                    'ACS': 'Acute Coronary Syndrome',
-                    'Aortic Dissection': 'Aortic Dissection', 
-                    'Pulmonary Embolism': 'Pulmonary Embolism',
-                    'PE': 'Pulmonary Embolism',
-                    'Heart Failure': 'Heart Failure',
-                    'Pneumonia': 'Pneumonia',
-                    'COPD': 'COPD',
-                    'Chronic Obstructive Pulmonary Disease': 'COPD',  # Map full name to abbreviation
-                    'Asthma': 'Asthma',
-                    'Gastroesophageal Reflux Disease': 'Gastro-oesophageal Reflux Disease',  # Handle spelling variations
-                    'GERD': 'Gastro-oesophageal Reflux Disease',
-                    'Multiple Sclerosis': 'Multiple Sclerosis',
-                    'MS': 'Multiple Sclerosis',
-                    'Atrial Fibrillation': 'Atrial Fibrillation',
-                    'AFib': 'Atrial Fibrillation',
-                    'A-fib': 'Atrial Fibrillation'
-                }
-                
-                # Try exact match first
-                if candidate in category_mapping:
-                    return category_mapping[candidate]
-                
-                # Try partial matching
-                for key, value in category_mapping.items():
-                    if key.lower() in candidate.lower():
-                        return value
-                
-                # Check if it matches any of our available categories
-                for category in self.flowchart_categories:
-                    if category.lower() in candidate.lower() or candidate.lower() in category.lower():
-                        return category
-                
-                # Return cleaned candidate if no mapping found
-                if len(candidate) > 3:
-                    return candidate
+                # Only accept if it looks like a medical condition
+                if self._is_valid_medical_category(candidate):
+                    return self._map_to_flowchart_category(candidate)
+        
+        return ""
+    
+    def _is_valid_medical_category(self, candidate: str) -> bool:
+        """Check if a candidate string looks like a valid medical category"""
+        
+        # Too short or too long
+        if len(candidate) < 3 or len(candidate) > 50:
+            return False
+        
+        # Contains invalid phrases that suggest it's not a medical condition
+        invalid_phrases = [
+            'the nature of', 'are concerning for', 'suggests that', 'indicates that',
+            'patient has', 'history of', 'symptoms of', 'signs of', 'evidence of',
+            'likely to be', 'consistent with', 'compatible with', 'rule out'
+        ]
+        
+        candidate_lower = candidate.lower()
+        for phrase in invalid_phrases:
+            if phrase in candidate_lower:
+                return False
+        
+        # Must start with a capital letter or be a known abbreviation
+        if not (candidate[0].isupper() or candidate.isupper()):
+            return False
+        
+        # Should not contain certain words that suggest it's not a condition name
+        invalid_words = ['her', 'his', 'the', 'this', 'that', 'which', 'when', 'where', 'how', 'why']
+        words = candidate.lower().split()
+        if any(word in invalid_words for word in words):
+            return False
+        
+        return True
+    
+    def _map_to_flowchart_category(self, candidate: str) -> str:
+        """Map a candidate to an actual flowchart category"""
+        
+        # Map common variations to actual flowchart categories
+        category_mapping = {
+            'Acute Coronary Syndrome': 'Acute Coronary Syndrome',
+            'ACS': 'Acute Coronary Syndrome',
+            'Aortic Dissection': 'Aortic Dissection', 
+            'Pulmonary Embolism': 'Pulmonary Embolism',
+            'PE': 'Pulmonary Embolism',
+            'Heart Failure': 'Heart Failure',
+            'Pneumonia': 'Pneumonia',
+            'COPD': 'COPD',
+            'Chronic Obstructive Pulmonary Disease': 'COPD',  # Map full name to abbreviation
+            'Asthma': 'Asthma',
+            'Gastroesophageal Reflux Disease': 'Gastro-oesophageal Reflux Disease',  # Handle spelling variations
+            'GERD': 'Gastro-oesophageal Reflux Disease',
+            'Multiple Sclerosis': 'Multiple Sclerosis',
+            'MS': 'Multiple Sclerosis',
+            'Atrial Fibrillation': 'Atrial Fibrillation',
+            'AFib': 'Atrial Fibrillation',
+            'A-fib': 'Atrial Fibrillation',
+            'Chronic Pancreatitis': 'Peptic Ulcer Disease',  # Map to closest gastrointestinal category
+            'Pancreatitis': 'Peptic Ulcer Disease',
+            'Peptic Ulcer': 'Peptic Ulcer Disease',
+            'Gastric Ulcer': 'Peptic Ulcer Disease',
+            'Duodenal Ulcer': 'Peptic Ulcer Disease'
+        }
+        
+        # Try exact match first
+        if candidate in category_mapping:
+            return category_mapping[candidate]
+        
+        # Try partial matching
+        for key, value in category_mapping.items():
+            if key.lower() in candidate.lower():
+                return value
+        
+        # Check if it matches any of our available categories
+        for category in self.flowchart_categories:
+            if category.lower() in candidate.lower() or candidate.lower() in category.lower():
+                return category
+        
+        # Return cleaned candidate if no mapping found
+        if len(candidate) > 3:
+            return candidate
         
         return ""
     
