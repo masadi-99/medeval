@@ -341,7 +341,8 @@ Answer:"""
                        provide_diagnosis_list: bool, two_step_reasoning: bool = False,
                        num_categories: int = 3, iterative_reasoning: bool = False,
                        max_reasoning_steps: int = 5, progressive_reasoning: bool = False,
-                       num_suspicions: int = 3, progressive_fast_mode: bool = False) -> Dict:
+                       num_suspicions: int = 3, progressive_fast_mode: bool = False,
+                       single_step_reasoning: bool = False) -> Dict:
         """
         Evaluate a single sample
         
@@ -356,6 +357,7 @@ Answer:"""
             progressive_reasoning: Whether to use progressive reasoning
             num_suspicions: Number of suspicions to generate in the first stage
             progressive_fast_mode: If True, use fast mode for progressive reasoning
+            single_step_reasoning: Whether to use single-step reasoning
         
         Returns:
             Dict with evaluation results
@@ -364,7 +366,42 @@ Answer:"""
         ground_truth = extract_diagnosis_from_path(sample_path)
         disease_category = extract_disease_category_from_path(sample_path)
         
-        if progressive_reasoning:
+        if single_step_reasoning:
+            # Single-step direct reasoning: All patient info + all diagnoses in one call
+            if hasattr(self, 'single_step_direct_reasoning'):
+                single_step_result = self.single_step_direct_reasoning(sample)
+                
+                predicted = single_step_result['final_diagnosis']
+                reasoning_trace = single_step_result.get('reasoning_trace', [])
+                reasoning_steps = single_step_result.get('reasoning_steps', 1)
+                
+                if self.show_responses:
+                    print(f"Sample: {sample_path}")
+                    print(f"Disease Category: {disease_category}")
+                    print(f"Single-Step Direct Reasoning:")
+                    if single_step_result['prompts_and_responses']:
+                        step = single_step_result['prompts_and_responses'][0]
+                        print(f"  Reasoning length: {len(step.get('reasoning', ''))} characters")
+                        print(f"  Extracted diagnosis: {step.get('extracted_diagnosis', 'N/A')}")
+                        print(f"  Final diagnosis: {predicted}")
+                    print(f"Ground Truth: {ground_truth}")
+                
+                # Set variables for later use
+                selected_categories = []
+                category_response = ""
+                category_correct = None
+                reasoning_path_correct = None
+            else:
+                print("❌ Error: Single-step reasoning enabled but clean_progressive_reasoning not integrated")
+                predicted = ""
+                reasoning_trace = []
+                reasoning_steps = 0
+                selected_categories = []
+                category_response = ""
+                category_correct = None
+                reasoning_path_correct = None
+        
+        elif progressive_reasoning:
             # Progressive reasoning: History -> Suspicions -> Tests -> Final diagnosis
             progressive_result = self.progressive_reasoning_workflow(
                 sample, num_suspicions, max_reasoning_steps, fast_mode=progressive_fast_mode
@@ -524,7 +561,16 @@ Answer:"""
         }
         
         # Add mode-specific information
-        if progressive_reasoning:
+        if single_step_reasoning:
+            result.update({
+                'single_step_reasoning': True,
+                'reasoning_trace': reasoning_trace,
+                'reasoning_steps': reasoning_steps,
+                'prompts_and_responses': single_step_result.get('prompts_and_responses', []) if 'single_step_result' in locals() else [],
+                'single_step_mode': single_step_result.get('mode', 'unknown') if 'single_step_result' in locals() else 'unknown',
+                'prompt': f"Single-Step Direct Reasoning - detailed analysis in one API call"
+            })
+        elif progressive_reasoning:
             result.update({
                 'progressive_reasoning': True,
                 'suspicions_generated': suspicions_generated,
@@ -546,7 +592,7 @@ Answer:"""
                 'reasoning_trace': reasoning_trace,
                 'reasoning_steps': reasoning_steps,
                 'reasoning_path_correct': reasoning_path_correct,
-                'category_prompt': category_prompt
+                'category_prompt': category_prompt if 'category_prompt' in locals() else ""
             })
         elif two_step_reasoning:
             result.update({
@@ -554,8 +600,8 @@ Answer:"""
                 'category_selection_response': category_response,
                 'selected_categories': selected_categories,
                 'category_selection_correct': category_correct,
-                'category_prompt': category_prompt,
-                'final_prompt': final_prompt
+                'category_prompt': category_prompt if 'category_prompt' in locals() else "",
+                'final_prompt': final_prompt if 'final_prompt' in locals() else ""
             })
         else:
             result['prompt'] = prompt
@@ -620,7 +666,8 @@ Answer:"""
                         max_reasoning_steps: int = 5,
                         progressive_reasoning: bool = False,
                         num_suspicions: int = 3,
-                        progressive_fast_mode: bool = False) -> Dict:
+                        progressive_fast_mode: bool = False,
+                        single_step_reasoning: bool = False) -> Dict:
         """
         Evaluate the entire dataset
         
@@ -636,6 +683,7 @@ Answer:"""
             progressive_reasoning: Whether to use progressive reasoning
             num_suspicions: Number of suspicions to generate in the first stage
             progressive_fast_mode: If True, use fast mode for progressive reasoning
+            single_step_reasoning: Whether to use single-step direct reasoning
         
         Returns:
             Dict with evaluation metrics and results
@@ -654,7 +702,9 @@ Answer:"""
         print(f"Evaluating {len(sample_files)} samples...")
         print(f"Using {num_inputs} input fields")
         print(f"Providing diagnosis list: {provide_diagnosis_list}")
-        if progressive_reasoning:
+        if single_step_reasoning:
+            print(f"Single-step direct reasoning enabled (all patient info + all diagnoses + detailed reasoning in one API call)")
+        elif progressive_reasoning:
             print(f"Progressive reasoning enabled (generating {num_suspicions} suspicions, max {max_reasoning_steps} steps)")
             print(f"Workflow: History -> Suspicions -> Tests -> Choice -> Flowcharts")
         elif two_step_reasoning:
@@ -688,7 +738,8 @@ Answer:"""
                 max_reasoning_steps=max_reasoning_steps,
                 progressive_reasoning=progressive_reasoning,
                 num_suspicions=num_suspicions,
-                progressive_fast_mode=progressive_fast_mode
+                progressive_fast_mode=progressive_fast_mode,
+                single_step_reasoning=single_step_reasoning
             )
             results.append(result)
         
@@ -1653,7 +1704,8 @@ Answer:"""
                                          max_reasoning_steps: int = 5,
                                          progressive_reasoning: bool = False,
                                          num_suspicions: int = 3,
-                                         progressive_fast_mode: bool = False) -> Dict:
+                                         progressive_fast_mode: bool = False,
+                                         single_step_reasoning: bool = False) -> Dict:
         """
         Concurrent version of evaluate_dataset for faster processing
         """
@@ -1671,10 +1723,16 @@ Answer:"""
         print(f"🚀 Concurrent evaluation of {len(sample_files)} samples...")
         print(f"Using {num_inputs} input fields")
         print(f"Providing diagnosis list: {provide_diagnosis_list}")
-        if two_step_reasoning:
+        if single_step_reasoning:
+            print(f"Single-step direct reasoning enabled (all patient info + all diagnoses + detailed reasoning in one API call)")
+        elif progressive_reasoning:
+            print(f"Progressive reasoning enabled (generating {num_suspicions} suspicions, max {max_reasoning_steps} steps)")
+        elif two_step_reasoning:
             print(f"Two-step reasoning enabled (selecting {num_categories} categories)")
+            print(f"Available categories: {len(self.flowchart_categories)}")
         elif iterative_reasoning:
             print(f"Iterative reasoning enabled (selecting {num_categories} categories, max {max_reasoning_steps} steps)")
+            print(f"Available categories: {len(self.flowchart_categories)}")
         print(f"Max concurrent requests: {self.max_concurrent}")
         print(f"Rate limit: {self.rate_limiter.requests_per_minute} requests/minute")
         print(f"LLM Judge enabled: {self.use_llm_judge}")
@@ -1842,13 +1900,57 @@ Answer:"""
                 avg_reasoning_steps = sum(reasoning_steps) / len(reasoning_steps)
                 overall_metrics['avg_reasoning_steps'] = avg_reasoning_steps
         
-        # Per-class metrics
+        if progressive_reasoning:
+            # Calculate test overlap metrics
+            test_overlap_precision_scores = [r.get('test_overlap_metrics', {}).get('test_overlap_precision', 0) for r in results 
+                                           if r.get('test_overlap_metrics') is not None]
+            test_overlap_recall_scores = [r.get('test_overlap_metrics', {}).get('test_overlap_recall', 0) for r in results 
+                                        if r.get('test_overlap_metrics') is not None]
+            test_overlap_f1_scores = [r.get('test_overlap_metrics', {}).get('test_overlap_f1', 0) for r in results 
+                                    if r.get('test_overlap_metrics') is not None]
+            test_overlap_jaccard_scores = [r.get('test_overlap_metrics', {}).get('test_overlap_jaccard', 0) for r in results 
+                                         if r.get('test_overlap_metrics') is not None]
+            
+            # Calculate overall test overlap performance
+            if test_overlap_precision_scores:
+                overall_metrics['test_overlap_precision'] = sum(test_overlap_precision_scores) / len(test_overlap_precision_scores)
+                overall_metrics['test_overlap_recall'] = sum(test_overlap_recall_scores) / len(test_overlap_recall_scores)
+                overall_metrics['test_overlap_f1'] = sum(test_overlap_f1_scores) / len(test_overlap_f1_scores)
+                overall_metrics['test_overlap_jaccard'] = sum(test_overlap_jaccard_scores) / len(test_overlap_jaccard_scores)
+            
+            # Calculate average test counts
+            recommended_counts = [r.get('test_overlap_metrics', {}).get('tests_recommended_count', 0) for r in results 
+                                if r.get('test_overlap_metrics') is not None]
+            actual_counts = [r.get('test_overlap_metrics', {}).get('tests_actual_count', 0) for r in results 
+                           if r.get('test_overlap_metrics') is not None]
+            overlap_counts = [r.get('test_overlap_metrics', {}).get('tests_overlap_count', 0) for r in results 
+                            if r.get('test_overlap_metrics') is not None]
+            unnecessary_counts = [r.get('test_overlap_metrics', {}).get('unnecessary_tests_count', 0) for r in results 
+                                if r.get('test_overlap_metrics') is not None]
+            missed_counts = [r.get('test_overlap_metrics', {}).get('missed_tests_count', 0) for r in results 
+                           if r.get('test_overlap_metrics') is not None]
+            
+            if recommended_counts:
+                overall_metrics['avg_tests_recommended'] = sum(recommended_counts) / len(recommended_counts)
+                overall_metrics['avg_tests_actual'] = sum(actual_counts) / len(actual_counts)
+                overall_metrics['avg_tests_overlap'] = sum(overlap_counts) / len(overlap_counts)
+                overall_metrics['avg_unnecessary_tests'] = sum(unnecessary_counts) / len(unnecessary_counts)
+                overall_metrics['avg_missed_tests'] = sum(missed_counts) / len(missed_counts)
+            
+            # Calculate average reasoning steps for progressive reasoning
+            reasoning_steps = [r.get('reasoning_steps', 0) for r in results 
+                             if r.get('reasoning_steps') is not None]
+            if reasoning_steps:
+                avg_reasoning_steps = sum(reasoning_steps) / len(reasoning_steps)
+                overall_metrics['avg_reasoning_steps'] = avg_reasoning_steps
+        
+        # Per-class metrics (individual diagnoses)
         per_class_metrics = {}
         for label in set(y_true):
             label_true = [1 if gt == label else 0 for gt in y_true]
             label_pred = [1 if pred == label else 0 for pred in y_pred]
             
-            if sum(label_true) > 0:
+            if sum(label_true) > 0:  # Only if there are true instances
                 per_class_metrics[label] = {
                     'precision': precision_score(label_true, label_pred, zero_division=0),
                     'recall': recall_score(label_true, label_pred, zero_division=0),
@@ -1877,8 +1979,8 @@ Answer:"""
                 'num_suspicions': num_suspicions if progressive_reasoning else None,
                 'max_reasoning_steps': max_reasoning_steps if (iterative_reasoning or progressive_reasoning) else None
             }
-        } 
-
+        }
+    
     def progressive_reasoning_workflow(self, sample: Dict, num_suspicions: int = 3, 
                                      max_reasoning_steps: int = 5, fast_mode: bool = False) -> Dict:
         """
@@ -1970,6 +2072,7 @@ Answer:"""
     
     def create_suspicions_prompt(self, history_summary: str, num_suspicions: int) -> str:
         """Create prompt for generating initial suspicions based on history"""
+        
         
         prompt = "You are a medical expert generating initial diagnostic category suspicions based on patient history.\n\n"
         

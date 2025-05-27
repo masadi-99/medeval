@@ -18,6 +18,15 @@ from .utils import (
     extract_disease_category_from_path
 )
 
+# Import clean progressive reasoning for single-step functionality
+try:
+    import sys
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from clean_progressive_reasoning import integrate_clean_progressive_reasoning
+    CLEAN_REASONING_AVAILABLE = True
+except ImportError:
+    CLEAN_REASONING_AVAILABLE = False
+
 
 def main():
     """Main CLI entry point for evaluation"""
@@ -71,6 +80,8 @@ def main():
                        help='Use progressive clinical workflow reasoning (history -> suspicions -> tests -> diagnosis)')
     parser.add_argument('--progressive-fast', action='store_true',
                        help='Use fast progressive reasoning (combines stages for better performance)')
+    parser.add_argument('--single-step-reasoning', action='store_true',
+                       help='Use single-step direct reasoning (all patient info + all diagnoses + detailed reasoning in one API call)')
     parser.add_argument('--num-categories', type=int, default=3,
                        help='Number of categories to select in two-step/iterative reasoning (default: 3)')
     parser.add_argument('--num-suspicions', type=int, default=3,
@@ -104,10 +115,10 @@ def main():
     use_llm_judge = args.use_llm_judge and not args.no_llm_judge
     
     # Validate reasoning mode arguments
-    reasoning_modes = [args.two_step, args.iterative, args.progressive, args.progressive_fast]
+    reasoning_modes = [args.two_step, args.iterative, args.progressive, args.progressive_fast, args.single_step_reasoning]
     if sum(reasoning_modes) > 1:
         print("❌ Error: Only one reasoning mode can be specified at a time")
-        print("   Choose from: --two-step, --iterative, --progressive, or --progressive-fast")
+        print("   Choose from: --two-step, --iterative, --progressive, --progressive-fast, or --single-step-reasoning")
         return 1
     
     # Set reasoning mode flags
@@ -115,6 +126,7 @@ def main():
     iterative_reasoning = args.iterative
     progressive_reasoning = args.progressive or args.progressive_fast
     progressive_fast_mode = args.progressive_fast
+    single_step_reasoning = args.single_step_reasoning
     
     # Validation for different reasoning modes
     if (iterative_reasoning or progressive_reasoning) and args.max_reasoning_steps < 1:
@@ -131,6 +143,15 @@ def main():
     
     if progressive_reasoning and not provide_list:
         print("❌ Error: Progressive reasoning requires --provide-list")
+        return 1
+    
+    if single_step_reasoning and not provide_list:
+        print("❌ Error: Single-step reasoning requires --provide-list")
+        return 1
+    
+    if single_step_reasoning and not CLEAN_REASONING_AVAILABLE:
+        print("❌ Error: Single-step reasoning requires clean_progressive_reasoning.py to be available")
+        print("   Make sure clean_progressive_reasoning.py is in the parent directory")
         return 1
     
     # Validation for different reasoning modes
@@ -164,6 +185,10 @@ def main():
             llm_test_overlap=args.llm_test_overlap
         )
         
+        # Integrate clean progressive reasoning if single-step reasoning is enabled
+        if single_step_reasoning:
+            evaluator = integrate_clean_progressive_reasoning(evaluator)
+        
         if args.concurrent:
             # Use concurrent evaluation
             import asyncio
@@ -178,7 +203,8 @@ def main():
                 max_reasoning_steps=args.max_reasoning_steps,
                 progressive_reasoning=progressive_reasoning,
                 num_suspicions=args.num_suspicions,
-                progressive_fast_mode=progressive_fast_mode
+                progressive_fast_mode=progressive_fast_mode,
+                single_step_reasoning=single_step_reasoning
             ))
         else:
             # Use synchronous evaluation
@@ -193,7 +219,8 @@ def main():
                 max_reasoning_steps=args.max_reasoning_steps,
                 progressive_reasoning=progressive_reasoning,
                 num_suspicions=args.num_suspicions,
-                progressive_fast_mode=progressive_fast_mode
+                progressive_fast_mode=progressive_fast_mode,
+                single_step_reasoning=single_step_reasoning
             )
         
         # Print summary
@@ -230,6 +257,7 @@ def main():
                 print(f"  Avg Test Overlap: {results['overall_metrics']['avg_tests_overlap']:.1f}")
                 print(f"  Avg Unnecessary Tests: {results['overall_metrics']['avg_unnecessary_tests']:.1f}")
                 print(f"  Avg Missed Tests: {results['overall_metrics']['avg_missed_tests']:.1f}")
+        print(f"Single-step reasoning: {results['configuration'].get('single_step_reasoning', False)}")
         print(f"Concurrent processing: {args.concurrent}")
         if args.concurrent:
             print(f"Max concurrent requests: {results['configuration'].get('max_concurrent', 10)}")
